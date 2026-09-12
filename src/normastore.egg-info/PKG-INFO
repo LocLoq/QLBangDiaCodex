@@ -1,0 +1,24 @@
+Metadata-Version: 2.4
+Name: normastore
+Version: 0.1.0
+Summary: Ứng dụng desktop quản lý băng đĩa NormaStore
+Requires-Python: <3.14,>=3.13
+Requires-Dist: SQLAlchemy<3,>=2.0.36
+Requires-Dist: PyMySQL<2,>=1.1.1
+Requires-Dist: alembic<2,>=1.14
+Requires-Dist: ttkbootstrap<2,>=1.10
+Requires-Dist: Pillow<12,>=11
+Requires-Dist: httpx<1,>=0.28
+Requires-Dist: pydantic-settings<3,>=2.6
+Requires-Dist: google-genai<2,>=1.0
+Requires-Dist: numpy<3,>=2.2
+Requires-Dist: matplotlib<4,>=3.10
+Requires-Dist: argon2-cffi<26,>=23.1
+Requires-Dist: keyring<27,>=25
+Requires-Dist: platformdirs<5,>=4.3
+Requires-Dist: tzdata<2027,>=2025.2
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8.3; extra == "dev"
+Requires-Dist: pytest-cov<7,>=6; extra == "dev"
+Requires-Dist: ruff<1,>=0.8; extra == "dev"
+Requires-Dist: pyinstaller<7,>=6.11; extra == "dev"

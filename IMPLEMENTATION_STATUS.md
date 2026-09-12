@@ -1,0 +1,20 @@
+# NormaStore implementation status
+
+Status recorded after local MySQL and release-artifact verification on 2026-09-06.
+
+| Area | Status | Evidence / remaining work |
+| --- | --- | --- |
+| Core catalog, copies, mixed rent/sale, returns and penalties | Implemented | Service tests cover checkout, partial return, penalties, sale conversion and sale returns. Catalog supports Card/List modes, lazy poster-cache loading, tooltips, and a Show detail view with season-filtered Episodes. |
+| Employee roles and manager approvals | Implemented | Manager-only catalog/create/edit/import-stock, bulk/archive/reputation/promotion actions; overdue or waiting-reservation extension approval; damaged sale-return approval; and only the shift owner or a manager can close a shift. These checks are enforced by application services and audited, not only disabled UI controls. |
+| Premium, reputation, combo, voucher and reservations | Implemented | Premium activation records its payment ledger entry; reputation policy tests; FIFO hold allocation; combo and voucher snapshots. |
+| Notifications | Implemented / SMTP delivery test pending | Email adapter with Credential Manager password, SMS mock, due-date grouping/catch-up and dashboard counters. SMTP host, username, sender and the `normastore` / `smtp` Credential Manager entry were verified locally on 2026-09-06. No real email has been sent or acceptance-tested. |
+| Reports and export | Implemented | Dashboard shows net cash flow (including deposits, less refunds); report/CSV label rental and sale values as accrued revenue, excluding deposits, and include Premium revenue. They include weighted discount rate, premium state, inventory drill-down, stockout ETA, overdue customers, rental/sale/combo demand, reservations and notifications. Financial and demand metrics support day/month/quarter/year/custom date filtering and were executed against `normastore_db`. |
+| TMDB importer | Verified against production API | Completed 2,000 Movie, 100 Show, 4,593 Episode and 144,707 copies with localized metadata and checkpoints. The rotated TMDB key completed a read-only discovery query on 2026-09-06. |
+| Gemini semantic search | Verified with partial cache | The TMDB and Gemini keys were rotated by the user and are configured locally; `.env.example` remains blank. 1,951 real 768-dimension vectors were created. The free-tier quota is currently exhausted, so remaining searches safely fall back to the local catalog until quota/service is available again. |
+| MySQL schema | Verified | `normastore_db` is at Alembic revision `20260904_03` with `utf8mb4_0900_ai_ci`; the MySQL account is `root`@`localhost` only. |
+| Release backup | Verified | `backups\\normastore_db-20260905-212012.sql` was created with MySQL 8.4.3 before the current release checks, restored to a temporary database, and matched 6,594 catalog items, 144,707 copies, 25,000 orders and revision `20260904_03`. The temporary restore database was removed. |
+| Windows portable build | Verified | `dist\\NormaStore\\NormaStore.exe` contains the dedicated `alembic_migrations` resource directory and bundled `logging.config`. After a full PyInstaller `COLLECT` build on 2026-09-06, the executable ran hidden for 12 seconds with SMTP disabled for the smoke test. |
+| Windows installer | Verified locally / clean-machine test pending | Inno Setup 6.7.3 compiled `dist\\installer\\NormaStore-Setup.exe` (SHA-256 `2042C36FD5DD6F71DB19A8D9DFC3E93F4634CC34777A336B23C39658B82859EF`) from the portable build that passed the 2026-09-06 startup smoke test. A prior silent install/uninstall smoke test verified the executable plus the `alembic_migrations` configuration and latest migration; this refreshed installer still requires final acceptance on a separate clean Windows/MySQL environment. |
+| Full target dataset and clean-machine installer test | Dataset verified / clean-machine test pending | The catalog target and 25,000 mock orders are present. A separate clean Windows/MySQL environment remains required for final installer acceptance. |
+
+Run [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) before distribution.

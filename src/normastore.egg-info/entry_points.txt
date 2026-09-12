@@ -1,0 +1,2 @@
+[console_scripts]
+normastore = normastore.__main__:main
