@@ -2164,7 +2164,10 @@ class StoreService:
                     combo_id = combo.id
                 else:
                     selected.clear()
-            target = rng.randint(2, 4)
+            # Small test/demo inventories can legitimately have only two or
+            # three valid copies.  Never request more lines than the pool can
+            # supply for this order.
+            target = min(rng.randint(2, 4), len(available))
             while len(selected) < target:
                 candidates = [copy for copy in available if copy not in selected]
                 if not candidates:

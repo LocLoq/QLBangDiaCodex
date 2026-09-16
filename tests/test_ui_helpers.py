@@ -4,13 +4,8 @@ from types import SimpleNamespace
 from matplotlib.figure import Figure
 
 from normastore.config import Settings
-from normastore.ui.app import (
-    NormaStoreApp,
-    _load_preferences,
-    _preferences_path,
-    theme_palette,
-    tooltip_position,
-)
+from normastore.ui.theme import AppearanceMixin, _load_preferences, _preferences_path, theme_palette
+from normastore.ui.tooltips import tooltip_position
 
 
 def test_tooltip_position_flips_and_clamps_at_virtual_screen_edges():
@@ -52,9 +47,9 @@ def test_figure_restyles_after_axis_clear():
     axis = figure.add_subplot(111)
     app = SimpleNamespace(_palette=theme_palette(True))
 
-    NormaStoreApp._style_figure(app, figure)
+    AppearanceMixin._style_figure(app, figure)
     axis.clear()
-    NormaStoreApp._style_figure(app, figure)
+    AppearanceMixin._style_figure(app, figure)
 
     assert figure.get_facecolor()[:3] == (43 / 255, 62 / 255, 80 / 255)
     assert axis.get_facecolor()[:3] == (43 / 255, 62 / 255, 80 / 255)

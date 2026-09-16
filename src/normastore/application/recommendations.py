@@ -67,9 +67,16 @@ def _cache_key(customer_id: int | None) -> str:
     return f"recommendation:{'today' if customer_id is None else customer_id}:{date.today():%Y%m%d}"
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Normalize timestamps returned by MySQL, which may lose tzinfo."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _from_cache(session: Session, key: str, candidates: dict[int, CatalogItem], limit: int) -> list[Recommendation] | None:
     row = session.scalar(select(RecommendationCache).where(RecommendationCache.cache_key == key))
-    if not row or row.expires_at <= datetime.now(timezone.utc):
+    if not row or _as_utc(row.expires_at) <= datetime.now(timezone.utc):
         return None
     results = [
         Recommendation(item_id, candidates[item_id].title, "Đề cử đã lưu", "Cache")
