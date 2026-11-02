@@ -28,15 +28,15 @@ class ShiftsPageMixin:
         employees_tree.pack(fill=BOTH, expand=True, pady=(12, 0))
 
         def refresh():
-            shift = self.call(lambda s: s.current_shift(self.account.employee_id))
+            shift = self.store.current_shift(self.account.employee_id)
             self.current_shift = shift
             info.set(
-                f"{self.account.employee.full_name}: "
+                f"{self.account.employee_name}: "
                 + (f"đang mở ca #{shift.id} từ {shift.opened_at:%H:%M}" if shift else "chưa mở ca")
             )
             self._refresh_status()
             employees_tree.delete(*employees_tree.get_children())
-            for employee in self.call(lambda s: s.list_employees()):
+            for employee in self.store.list_employees():
                 employees_tree.insert(
                     "",
                     END,
@@ -82,17 +82,7 @@ class ShiftsPageMixin:
             if not password:
                 return
             try:
-                self.call(
-                    lambda s: s.create_employee_account(
-                        full_name,
-                        phone or "",
-                        username,
-                        RoleCode(role.upper()),
-                        password,
-                        self.account.employee_id,
-                    ),
-                    True,
-                )
+                self.store.create_employee_account(full_name, phone or '', username, RoleCode(role.upper()), password, self.account.employee_id)
                 refresh()
             except Exception as exc:
                 messagebox.showerror("Nhân viên", str(exc), parent=self)

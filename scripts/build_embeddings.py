@@ -7,13 +7,12 @@ from __future__ import annotations
 
 import argparse
 import sys
+from functools import partial
 
-from sqlalchemy import select
-
-from normastore.application.ai_search import embedding_hash, embedding_source
+from normastore.application.embeddings import build_embeddings
 from normastore.bootstrap import bootstrap
 from normastore.config import Settings
-from normastore.infrastructure.database import CatalogItem, ContentEmbedding
+from normastore.infrastructure.database.unit_of_work import UnitOfWork
 from normastore.infrastructure.external import GeminiSearch
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -33,43 +32,13 @@ def main() -> None:
         settings.gemini_embedding_dimensions,
     )
     factory = bootstrap(settings)
-    refreshed = 0
-    with factory() as session:
-        statement = select(CatalogItem).where(CatalogItem.archived.is_(False)).order_by(CatalogItem.id)
-        if args.limit:
-            statement = statement.limit(args.limit)
-        for item in session.scalars(statement):
-            source_hash = embedding_hash(item)
-            cached = session.scalar(select(ContentEmbedding).where(ContentEmbedding.item_id == item.id))
-            if (
-                cached
-                and cached.source_hash == source_hash
-                and cached.model == settings.gemini_embedding_model
-                and cached.dimensions == settings.gemini_embedding_dimensions
-            ):
-                continue
-            vector = provider.embed(embedding_source(item))
-            if vector is None:
-                session.rollback()
-                raise SystemExit(provider.unavailable_reason())
-            values = vector.astype("float32", copy=False)
-            if cached:
-                cached.model = settings.gemini_embedding_model
-                cached.dimensions = values.size
-                cached.vector = values.tobytes()
-                cached.source_hash = source_hash
-            else:
-                session.add(ContentEmbedding(
-                    item_id=item.id,
-                    model=settings.gemini_embedding_model,
-                    dimensions=values.size,
-                    vector=values.tobytes(),
-                    source_hash=source_hash,
-                ))
-            refreshed += 1
-            if refreshed % 25 == 0:
-                session.commit()
-        session.commit()
+    try:
+        refreshed = build_embeddings(
+            partial(UnitOfWork, factory), provider, settings.gemini_embedding_model,
+            settings.gemini_embedding_dimensions, args.limit,
+        )
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
     print(f"Đã tạo/cập nhật {refreshed} embedding.")
 
 

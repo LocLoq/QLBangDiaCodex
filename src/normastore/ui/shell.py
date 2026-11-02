@@ -6,13 +6,10 @@ from decimal import Decimal
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
-import keyring
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 from ttkbootstrap.constants import BOTH, LEFT, RIGHT, X, Y
 
 from normastore.domain.enums import RoleCode
-from normastore.infrastructure.external import MockSmsSender, SmtpSender
-from normastore.jobs import process_notification_outbox
 from normastore.ui.tooltips import Tooltip
 
 _RAIL_WIDTH = 56
@@ -63,7 +60,7 @@ class ShellMixin:
         )
 
         def submit(_event=None):
-            account = self.call(lambda s: s.authenticate(user_var.get(), pass_var.get()), True)
+            account = self.store.authenticate(user_var.get(), pass_var.get())
             if not account:
                 messagebox.showerror(
                     "Đăng nhập", "Tài khoản hoặc mật khẩu không đúng.", parent=login
@@ -255,36 +252,10 @@ class ShellMixin:
 
     def _schedule_notification_worker(self) -> None:
         def work() -> None:
-            session = self.factory()
             try:
-                email_sender = None
-                if (
-                    self.settings.smtp_host
-                    and self.settings.smtp_username
-                    and self.settings.smtp_from
-                ):
-                    password = keyring.get_password("normastore", "smtp")
-                    if password:
-                        smtp = SmtpSender(
-                            self.settings.smtp_host,
-                            self.settings.smtp_port,
-                            self.settings.smtp_username,
-                            password,
-                            self.settings.smtp_starttls,
-                        )
-                        email_sender = lambda recipient, body: smtp.send(
-                            self.settings.smtp_from, recipient, "Nhắc hạn trả đĩa NormaStore", body
-                        )
-                process_notification_outbox(
-                    session,
-                    send_email=email_sender,
-                    send_sms=lambda phone, body: MockSmsSender().send(phone, body),
-                )
-                session.commit()
+                self.store.process_notifications()
             except Exception:
-                session.rollback()
-            finally:
-                session.close()
+                pass
 
         self.executor.submit(work)
         self.after(5 * 60 * 1000, self._schedule_notification_worker)
@@ -311,7 +282,7 @@ class ShellMixin:
         self._set_appearance()
 
     def _can_manage(self) -> bool:
-        return bool(self.account and self.account.role.code in (RoleCode.ADMIN, RoleCode.MANAGER))
+        return bool(self.account and self.account.role_code in (RoleCode.ADMIN, RoleCode.MANAGER))
 
     def _change_password(self) -> None:
         if not self.account:
@@ -329,7 +300,7 @@ class ShellMixin:
         if new_password is None:
             return
         try:
-            self.call(lambda s: s.change_password(self.account.id, current, new_password), True)
+            self.store.change_password(self.account.id, current, new_password)
             messagebox.showinfo("Đổi mật khẩu", "Đã đổi mật khẩu thành công.", parent=self)
         except Exception as exc:
             messagebox.showerror("Đổi mật khẩu", str(exc), parent=self)
@@ -337,10 +308,10 @@ class ShellMixin:
     def _refresh_status(self) -> None:
         if not self.account:
             return
-        self.current_shift = self.call(lambda s: s.current_shift(self.account.employee_id))
+        self.current_shift = self.store.current_shift(self.account.employee_id)
         ca = f"Ca #{self.current_shift.id} đang mở" if self.current_shift else "Chưa mở ca"
         self.status.set(
-            f"{self.account.employee.full_name} • {self.account.role.name} • {ca} • MySQL: kết nối"
+            f"{self.account.employee_name} • {self.account.role_name} • {ca} • MySQL: kết nối"
         )
 
     def show_page(self, name: str, builder) -> None:
@@ -367,12 +338,7 @@ class ShellMixin:
         opening_cash = simpledialog.askfloat("Mở ca", "Tiền đầu ca:", minvalue=0, parent=self)
         if opening_cash is None:
             return
-        self.current_shift = self.call(
-            lambda s: s.open_shift(
-                self.account.employee_id, Decimal(str(opening_cash)), self.account.id
-            ),
-            True,
-        )
+        self.current_shift = self.store.open_shift(self.account.employee_id, Decimal(str(opening_cash)))
         self._refresh_status()
 
     def _close_shift(self) -> None:
@@ -381,10 +347,5 @@ class ShellMixin:
         closing_cash = simpledialog.askfloat("Đóng ca", "Tiền cuối ca:", minvalue=0, parent=self)
         if closing_cash is None:
             return
-        self.call(
-            lambda s: s.close_shift(
-                self.current_shift.id, Decimal(str(closing_cash)), self.account.id
-            ),
-            True,
-        )
+        self.store.close_shift(self.current_shift.id, Decimal(str(closing_cash)), self.account.employee_id)
         self._refresh_status()

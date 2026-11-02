@@ -13,7 +13,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from normastore.application.services import OrderReceipt
+from normastore.application.contracts import OrderReceipt
 from normastore.domain.enums import LineAction
 
 

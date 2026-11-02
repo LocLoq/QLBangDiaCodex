@@ -5,11 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
 from normastore.domain.enums import NotificationStatus, RentalState
-from normastore.infrastructure.database import Customer, NotificationOutbox, OrderLine, RentalTerm
 
 REMINDER_EVENTS = (("BEFORE_DUE", -1), ("DUE_TODAY", 0), ("OVERDUE_1", 1), ("OVERDUE_3", 3), ("OVERDUE_7", 7))
 
@@ -48,26 +44,15 @@ def current_reminder_event(due_date: date, today: date) -> str:
 
 
 def process_notification_outbox(
-    session: Session,
+    repository,
     send_email: Callable[[str, str], None] | None,
     send_sms: Callable[[str, str], None] | None,
     now: datetime | None = None,
 ) -> NotificationRun:
     """Send one currently relevant reminder per rental/channel and mark stale entries."""
     now = now or datetime.now(timezone.utc)
-    rows = session.execute(
-        select(NotificationOutbox, RentalTerm, OrderLine, Customer)
-        .outerjoin(RentalTerm, NotificationOutbox.rental_term_id == RentalTerm.id)
-        .outerjoin(OrderLine, RentalTerm.line_id == OrderLine.id)
-        .join(Customer, NotificationOutbox.customer_id == Customer.id)
-        .where(
-            NotificationOutbox.status.in_([NotificationStatus.PENDING, NotificationStatus.FAILED]),
-            NotificationOutbox.scheduled_for <= now,
-        )
-        .order_by(NotificationOutbox.scheduled_for, NotificationOutbox.id)
-        .with_for_update()
-    ).all()
-    grouped: dict[tuple[int | None, str], list[tuple[NotificationOutbox, RentalTerm | None, OrderLine | None, Customer]]] = defaultdict(list)
+    rows = repository.due_reminders(now)
+    grouped = defaultdict(list)
     for row in rows:
         grouped[(row[0].rental_term_id, row[0].channel)].append(row)
 

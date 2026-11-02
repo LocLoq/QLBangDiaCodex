@@ -7,14 +7,10 @@ from tkinter import filedialog, messagebox, ttk
 import ttkbootstrap as tb
 from ttkbootstrap.constants import BOTH, END, RIGHT
 
-from normastore.application.services import (
-    PageRequest,
-    SortSpec,
-)
+from normastore.application.contracts import PageRequest, SortSpec
 from normastore.domain.enums import (
     LineAction,
 )
-from normastore.infrastructure.pdf_receipts import PdfReceiptExporter
 from normastore.ui.formatting import vnd
 
 
@@ -58,14 +54,7 @@ class OrdersPageMixin:
             export_button.configure(state="disabled", text="Đang xuất PDF…")
 
             def work():
-                receipt = self.call(lambda s: s.order_receipt(order_id))
-                PdfReceiptExporter().export(receipt, Path(path), layout)
-                self.call(
-                    lambda s: s.record_order_pdf_export(
-                        order_id, self.account.employee_id, layout, Path(path).name
-                    ),
-                    True,
-                )
+                self.store.export_order_pdf(order_id, self.account.employee_id, Path(path), layout)
                 return Path(path)
 
             def done(saved_path: Path):
@@ -99,13 +88,7 @@ class OrdersPageMixin:
             tree.delete(*tree.get_children())
             rows.clear()
             export_button.configure(state="disabled")
-            result = self.call(
-                lambda s: s.query_orders(
-                    search.get(),
-                    PageRequest(page_number.get(), 50),
-                    SortSpec(str(sort_state["field"]), bool(sort_state["descending"])),
-                )
-            )
+            result = self.store.query_orders(search.get(), PageRequest(page_number.get(), 50), SortSpec(str(sort_state['field']), bool(sort_state['descending'])))
             pager_update(result)
             for order in result.items:
                 rows[str(order.order_id)] = order
@@ -128,7 +111,7 @@ class OrdersPageMixin:
             if len(selected) != 1:
                 return
             try:
-                order, lines = self.call(lambda s: s.order_detail(int(selected[0])))
+                order, lines = self.store.order_detail(int(selected[0]))
             except Exception as exc:
                 return messagebox.showerror("Phiếu", str(exc), parent=self)
             dialog = tb.Toplevel(self)

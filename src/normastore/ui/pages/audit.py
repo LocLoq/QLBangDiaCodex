@@ -6,11 +6,7 @@ from tkinter import ttk
 
 from ttkbootstrap.constants import BOTH, END, LEFT, X
 
-from normastore.application.services import (
-    AuditQuery,
-    PageRequest,
-    SortSpec,
-)
+from normastore.application.contracts import AuditQuery, PageRequest, SortSpec
 
 
 class AuditPageMixin:
@@ -43,13 +39,7 @@ class AuditPageMixin:
         def refresh():
             tree.delete(*tree.get_children())
             rows.clear()
-            result = self.call(
-                lambda s: s.query_audit_logs(
-                    AuditQuery(text.get(), action.get()),
-                    PageRequest(page_number.get(), 50),
-                    SortSpec(str(sort_state["field"]), bool(sort_state["descending"])),
-                )
-            )
+            result = self.store.query_audit_logs(AuditQuery(text.get(), action.get()), PageRequest(page_number.get(), 50), SortSpec(str(sort_state['field']), bool(sort_state['descending'])))
             pager(result)
             for row in result.items:
                 rows[str(row.audit_id)] = row

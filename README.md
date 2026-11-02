@@ -2,6 +2,8 @@
 
 Ứng dụng desktop quản lý băng đĩa truyền thống, xây bằng Python 3.13, Tkinter/ttkbootstrap và MySQL 8.4 qua Laragon.
 
+Đặc tả kiến trúc, dữ liệu và nghiệp vụ: [specs/README.md](specs/README.md).
+
 Trước khi build hoặc triển khai, xem [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md).
 Tiến độ và các điều kiện còn thiếu được ghi ở [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
 

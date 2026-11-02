@@ -34,7 +34,7 @@ class NotificationsPageMixin:
 
         def refresh():
             tree.delete(*tree.get_children())
-            for notification in self.call(lambda s: s.list_notifications()):
+            for notification in self.store.list_notifications():
                 tree.insert(
                     "",
                     END,

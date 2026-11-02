@@ -15,7 +15,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from normastore.bootstrap import bootstrap  # noqa: E402
+from normastore.bootstrap import bootstrap, build_application  # noqa: E402
 from normastore.config import Settings  # noqa: E402
 from normastore.ui.app import NormaStoreApp  # noqa: E402
 
@@ -67,9 +67,9 @@ def _treeview_alignment(container: tk.Misc) -> list[str]:
         for child in widget.winfo_children():
             if child.winfo_class() == "Treeview":
                 for column in ("#0", *child["columns"]):
-                    if child.column(column, "anchor") != "center":
+                    if str(child.column(column, "anchor")) != "center":
                         problems.append(f"{child.winfo_name()}/{column}: cell anchor")
-                    if child.heading(column, "anchor") != "center":
+                    if str(child.heading(column, "anchor")) != "center":
                         problems.append(f"{child.winfo_name()}/{column}: heading anchor")
             visit(child)
 
@@ -80,15 +80,16 @@ def _treeview_alignment(container: tk.Misc) -> list[str]:
 def main() -> int:
     settings = Settings()
     factory = bootstrap(settings)
+    service, poster_cache = build_application(factory, settings)
 
     def automatic_login(self) -> None:
-        self.account = self.call(lambda service: service.authenticate("admin", "admin123"), True)
+        self.account = self.store.authenticate('admin', 'admin123')
         if not self.account:
             raise RuntimeError("Không đăng nhập được tài khoản admin để smoke-test UI.")
         self._build_shell()
 
     NormaStoreApp._login = automatic_login
-    app = NormaStoreApp(factory, settings)
+    app = NormaStoreApp(service, settings, poster_cache)
     failures: list[str] = []
     try:
         app.state("normal")

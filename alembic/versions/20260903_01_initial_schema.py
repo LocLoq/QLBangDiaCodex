@@ -5,7 +5,7 @@ Revises:
 Create Date: 2026-09-03
 """
 from alembic import op
-from normastore.infrastructure.database import Base
+from normastore.infrastructure.database.models import Base
 
 revision = "20260903_01"
 down_revision = None

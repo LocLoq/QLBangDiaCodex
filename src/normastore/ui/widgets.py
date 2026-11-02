@@ -136,7 +136,7 @@ class CommonWidgetsMixin:
         name = simpledialog.askstring("Khách hàng mới", "Họ tên:", parent=self)
         phone = simpledialog.askstring("Khách hàng mới", "Số điện thoại:", parent=self)
         if name and phone:
-            self.call(lambda s: s.add_customer(name, phone), True)
+            self.store.add_customer(name, phone)
             refresh = getattr(self.pages.get("Lập phiếu"), "refresh", None)
             if refresh:
                 refresh()

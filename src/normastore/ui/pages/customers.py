@@ -30,9 +30,9 @@ class CustomersPageMixin:
         def refresh():
             tree.delete(*tree.get_children())
             rows.clear()
-            for customer in self.call(lambda s: s.list_customers(search.get())):
+            for customer in self.store.list_customers(search.get()):
                 rows[str(customer.id)] = customer
-                premium = self.call(lambda s, ident=customer.id: s.premium_active(ident))
+                premium = self.store.premium_active(customer.id)
                 tree.insert(
                     "",
                     END,
@@ -61,12 +61,7 @@ class CustomersPageMixin:
                 if method is None:
                     return
                 try:
-                    self.call(
-                        lambda s: s.activate_premium(
-                            int(ids[0]), days, self.account.employee_id, method
-                        ),
-                        True,
-                    )
+                    self.store.activate_premium(int(ids[0]), days, self.account.employee_id, method)
                     refresh()
                 except Exception as exc:
                     messagebox.showerror("Premium", str(exc), parent=self)
@@ -84,12 +79,7 @@ class CustomersPageMixin:
             if not reason:
                 return
             try:
-                self.call(
-                    lambda s: s.adjust_reputation(
-                        int(ids[0]), delta, reason, self.account.employee_id
-                    ),
-                    True,
-                )
+                self.store.adjust_reputation(int(ids[0]), delta, reason, self.account.employee_id)
                 refresh()
             except Exception as exc:
                 messagebox.showerror("Uy tín", str(exc), parent=self)
@@ -112,7 +102,7 @@ class CustomersPageMixin:
                 button.configure(state="normal", text="Đề cử phim")
                 messagebox.showerror("Đề cử", "Không thể tạo đề cử lúc này.", parent=self)
 
-            self.call_async(lambda s: s.customer_recommendations(int(ids[0])), done, failed, True)
+            self._run_async(lambda: self.store.customer_recommendations(int(ids[0])), done, failed)
 
         ttk.Button(bottom, text="Thêm khách", command=add_customer).pack(side=LEFT)
         ttk.Button(bottom, text="Kích hoạt Premium", command=premium, bootstyle="warning").pack(

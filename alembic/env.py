@@ -3,7 +3,7 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-from normastore.infrastructure.database import Base
+from normastore.infrastructure.database.models import Base
 
 config = context.config
 if config.config_file_name:

@@ -52,12 +52,12 @@ class DashboardPageMixin:
         recommendation_tree.pack(fill=BOTH, expand=True)
 
         def refresh():
-            stats = self.call(lambda s: s.dashboard())
+            stats = self.store.dashboard()
             for key in labels:
                 labels[key].configure(text=str(stats[key]))
             revenue.configure(text=f"Dòng tiền thuần (gồm cọc): {vnd(stats['cash_flow'])}")
             recommendation_tree.delete(*recommendation_tree.get_children())
-            for recommendation in self.call(lambda s: s.today_recommendations(), True):
+            for recommendation in self.store.today_recommendations():
                 recommendation_tree.insert(
                     "",
                     END,

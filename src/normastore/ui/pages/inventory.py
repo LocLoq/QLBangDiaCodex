@@ -6,11 +6,7 @@ from tkinter import messagebox, simpledialog, ttk
 
 from ttkbootstrap.constants import BOTH, END, LEFT, RIGHT, X
 
-from normastore.application.services import (
-    PageRequest,
-    SortSpec,
-    UpdateInventoryCopyRequest,
-)
+from normastore.application.contracts import PageRequest, SortSpec, UpdateInventoryCopyRequest
 from normastore.domain.enums import (
     CopyCondition,
     CopyStatus,
@@ -56,13 +52,7 @@ class InventoryPageMixin:
             selected_status = (
                 None if status_filter.get() == "TẤT CẢ" else CopyStatus(status_filter.get())
             )
-            result = self.call(
-                lambda s: s.query_inventory(
-                    selected_status,
-                    PageRequest(page_number.get(), 50),
-                    SortSpec(str(sort_state["field"]), bool(sort_state["descending"])),
-                )
-            )
+            result = self.store.query_inventory(selected_status, PageRequest(page_number.get(), 50), SortSpec(str(sort_state['field']), bool(sort_state['descending'])))
             pager_update(result)
             for copy in result.items:
                 tree.insert(
@@ -150,12 +140,7 @@ class InventoryPageMixin:
                         number(deposit_override),
                         note.get(),
                     )
-                    self.call(
-                        lambda s: s.update_inventory_copy(
-                            int(selected[0]), request, self.account.employee_id
-                        ),
-                        True,
-                    )
+                    self.store.update_inventory_copy(int(selected[0]), request, self.account.employee_id)
                     dialog.destroy()
                     refresh()
                 except Exception as exc:
@@ -176,12 +161,7 @@ class InventoryPageMixin:
             if note is None:
                 return
             try:
-                self.call(
-                    lambda s: s.inspect_copy(
-                        int(selected[0]), self.account.employee_id, target_status, note
-                    ),
-                    True,
-                )
+                self.store.inspect_copy(int(selected[0]), self.account.employee_id, target_status, note)
                 refresh()
             except Exception as exc:
                 messagebox.showerror("Kiểm tra kho", str(exc), parent=self)

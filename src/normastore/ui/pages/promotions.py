@@ -34,12 +34,7 @@ class PromotionsPageMixin:
                 return
             try:
                 ids = [int(value.strip()) for value in item_text.split(",")]
-                self.call(
-                    lambda s: s.create_fixed_combo(
-                        name, ids, Decimal(discount), self.account.employee_id
-                    ),
-                    True,
-                )
+                self.store.create_fixed_combo(name, ids, Decimal(discount), self.account.employee_id)
                 messagebox.showinfo(
                     "Combo", "Đã tạo combo. Combo sẽ xuất hiện trong màn lập phiếu.", parent=self
                 )
@@ -76,12 +71,7 @@ class PromotionsPageMixin:
             if not discount:
                 return
             try:
-                self.call(
-                    lambda s: s.create_show_episode_combo(
-                        name, show_id, count, Decimal(discount), self.account.employee_id
-                    ),
-                    True,
-                )
+                self.store.create_show_episode_combo(name, show_id, count, Decimal(discount), self.account.employee_id)
                 messagebox.showinfo(
                     "Combo tập phim", "Đã tạo combo theo số tập cùng bộ.", parent=self
                 )
@@ -131,7 +121,7 @@ class PromotionsPageMixin:
 
         def refresh_promotions():
             combo_tree.delete(*combo_tree.get_children())
-            for item in self.call(lambda s: s.list_combos(include_inactive=True)):
+            for item in self.store.list_combos(include_inactive=True):
                 combo_tree.insert(
                     "",
                     END,
@@ -146,7 +136,7 @@ class PromotionsPageMixin:
                     ),
                 )
             tree.delete(*tree.get_children())
-            for item in self.call(lambda s: s.list_vouchers()):
+            for item in self.store.list_vouchers():
                 tree.insert(
                     "",
                     END,
@@ -170,18 +160,7 @@ class PromotionsPageMixin:
             if not value:
                 return
             try:
-                text = value.strip().lower()
-                percent = None if text.endswith("d") else Decimal(text)
-                amount = Decimal(text[:-1]) if text.endswith("d") else None
-                self.call(
-                    lambda s: s.create_voucher(
-                        code,
-                        percent_off=percent,
-                        amount_off=amount,
-                        actor_id=self.account.employee_id,
-                    ),
-                    True,
-                )
+                self.store.create_voucher_from_text(code, value, self.account.employee_id)
                 refresh_promotions()
             except Exception as exc:
                 messagebox.showerror("Voucher", str(exc), parent=self)

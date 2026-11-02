@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-import os
 import tkinter as tk
 from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import messagebox
 
-import keyring
 import ttkbootstrap as tb
 from matplotlib.figure import Figure
 from PIL import ImageTk
 
-from normastore.application.services import StoreService
+from normastore.application.contracts import AccountView, ShiftView
 from normastore.config import Settings
-from normastore.infrastructure.database import Shift, UserAccount
-from normastore.infrastructure.external import PosterCache
 from normastore.ui.media import PosterMixin
 from normastore.ui.pages import (
     AuditPageMixin,
@@ -63,17 +59,17 @@ class NormaStoreApp(
 ):
     """Desktop application public entry point."""
 
-    def __init__(self, factory, settings: Settings) -> None:
+    def __init__(self, service, settings: Settings, poster_cache) -> None:
         preferences = _load_preferences(settings)
         super().__init__(themename=preferences["theme"])
-        self.factory, self.settings = factory, settings
+        self.store, self.settings = service, settings
         self._preferences_path = _preferences_path(settings)
         self.dark_mode = tk.BooleanVar(value=preferences["theme"] == "superhero")
         self.font_scale = tk.StringVar(value=preferences["font_scale"])
-        self.account: UserAccount | None = None
-        self.current_shift: Shift | None = None
+        self.account: AccountView | None = None
+        self.current_shift: ShiftView | None = None
         self.executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="normastore")
-        self.poster_cache = PosterCache(settings.cache_dir / "posters")
+        self.poster_cache = poster_cache
         self._poster_images: OrderedDict[str, ImageTk.PhotoImage] = OrderedDict()
         self._poster_loading: set[str] = set()
         self._theme_canvases: list[tk.Canvas] = []
@@ -94,49 +90,6 @@ class NormaStoreApp(
     def _close(self) -> None:
         self.executor.shutdown(wait=False, cancel_futures=True)
         self.destroy()
-
-    def _gemini_api_key(self) -> str | None:
-        return (
-            os.environ.get("NORMASTORE_GEMINI_API_KEY")
-            or self.settings.gemini_api_key
-            or keyring.get_password("normastore", "gemini")
-        )
-
-    def service(self, write: bool = False):
-        session = self.factory()
-        return (
-            session,
-            StoreService(
-                session,
-                self._gemini_api_key(),
-                self.settings.gemini_embedding_model,
-                self.settings.gemini_embedding_dimensions,
-                self.settings.gemini_generation_model,
-            ),
-            write,
-        )
-
-    def call(self, func, write: bool = False):
-        session, service, _ = self.service(write)
-        try:
-            value = func(service)
-            if write:
-                session.commit()
-            return value
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-    def call_async(
-        self,
-        func,
-        done: Callable | None = None,
-        failed: Callable[[Exception], None] | None = None,
-        write: bool = False,
-    ) -> None:
-        self._poll_future(self.executor.submit(lambda: self.call(func, write)), done, failed)
 
     def _run_async(
         self,

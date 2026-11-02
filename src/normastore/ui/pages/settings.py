@@ -1,19 +1,13 @@
 from __future__ import annotations
 
-import os
 import tkinter as tk
 from datetime import date, timedelta
 from decimal import Decimal
 from tkinter import messagebox, simpledialog, ttk
 
-import keyring
 from ttkbootstrap.constants import LEFT, X
 
-from normastore.application.services import (
-    MockSeedRequest,
-    run_mock_seed,
-)
-from normastore.infrastructure.external import SmtpSender
+from normastore.application.contracts import MockSeedRequest
 
 
 class SettingsPageMixin:
@@ -32,15 +26,7 @@ class SettingsPageMixin:
         ).pack(anchor="w")
         gemini_box = ttk.Labelframe(page, text="Gemini", padding=12)
         gemini_box.pack(fill=X, pady=(14, 0))
-        source = (
-            "biến môi trường"
-            if os.environ.get("NORMASTORE_GEMINI_API_KEY")
-            else (
-                "Windows Credential Manager"
-                if keyring.get_password("normastore", "gemini")
-                else "chưa cấu hình"
-            )
-        )
+        source = self.store.gemini_key_source()
         ttk.Label(
             gemini_box, text=f"Nguồn key hiện tại: {source}. Key không được hiển thị lại."
         ).pack(anchor="w")
@@ -57,7 +43,7 @@ class SettingsPageMixin:
             if not value:
                 return
             try:
-                keyring.set_password("normastore", "gemini", value.strip())
+                self.store.save_gemini_key(value)
                 messagebox.showinfo(
                     "Gemini", "Đã lưu key trong Windows Credential Manager.", parent=self
                 )
@@ -70,15 +56,13 @@ class SettingsPageMixin:
             ):
                 return
             try:
-                keyring.delete_password("normastore", "gemini")
-            except keyring.errors.PasswordDeleteError:
-                pass
+                self.store.delete_gemini_key()
             except Exception as exc:
                 return messagebox.showerror("Gemini", str(exc), parent=self)
             messagebox.showinfo("Gemini", "Đã xóa key lưu cục bộ.", parent=self)
 
         def test_gemini():
-            if not self._gemini_api_key():
+            if not self.store.has_gemini_key():
                 return messagebox.showerror("Gemini", "Chưa có Gemini API key.", parent=self)
             test_button.configure(state="disabled", text="Đang kiểm tra…")
 
@@ -100,9 +84,7 @@ class SettingsPageMixin:
                     parent=self,
                 )
 
-            self.call_async(
-                lambda s: s.search_by_description_response("phim gia đình"), done, failed
-            )
+            self._run_async(lambda: self.store.search_by_description_response('phim gia đình'), done, failed)
 
         ttk.Button(gemini_actions, text="Lưu key", command=save_gemini, bootstyle="secondary").pack(
             side=LEFT
@@ -118,7 +100,7 @@ class SettingsPageMixin:
         if self._can_manage():
             deposit_box = ttk.Labelframe(page, text="Tiền cọc mặc định theo định dạng", padding=12)
             deposit_box.pack(fill=X, pady=(14, 0))
-            defaults = self.call(lambda s: s.deposit_defaults())
+            defaults = self.store.deposit_defaults()
             values = {
                 name: tk.StringVar(value=str(defaults[name]))
                 for name in ("VHS", "VCD", "DVD", "Blu-ray")
@@ -140,12 +122,7 @@ class SettingsPageMixin:
 
             def save_defaults():
                 try:
-                    self.call(
-                        lambda s: s.save_deposit_defaults(
-                            parsed_defaults(), self.account.employee_id
-                        ),
-                        True,
-                    )
+                    self.store.save_deposit_defaults(parsed_defaults(), self.account.employee_id)
                     messagebox.showinfo("Tiền cọc", "Đã lưu mức cọc theo định dạng.", parent=self)
                 except Exception as exc:
                     messagebox.showerror("Tiền cọc", str(exc), parent=self)
@@ -158,16 +135,8 @@ class SettingsPageMixin:
                 ):
                     return
                 try:
-                    self.call(
-                        lambda s: s.save_deposit_defaults(
-                            parsed_defaults(), self.account.employee_id
-                        ),
-                        True,
-                    )
-                    count = self.call(
-                        lambda s: s.apply_deposit_defaults_to_inventory(self.account.employee_id),
-                        True,
-                    )
+                    self.store.save_deposit_defaults(parsed_defaults(), self.account.employee_id)
+                    count = self.store.apply_deposit_defaults_to_inventory(self.account.employee_id)
                     messagebox.showinfo("Tiền cọc", f"Đã áp dụng cho {count} bản đĩa.", parent=self)
                 except Exception as exc:
                     messagebox.showerror("Tiền cọc", str(exc), parent=self)
@@ -251,8 +220,7 @@ class SettingsPageMixin:
                     self.after(0, lambda: mock_status.set(f"Đang xử lý ngày {completed}/{total}…"))
 
                 self._run_async(
-                    lambda: run_mock_seed(
-                        self.factory,
+                    lambda: self.store.run_mock_seed(
                         MockSeedRequest(start_on, end_on, self.account.employee_id),
                         progress,
                     ),
@@ -267,30 +235,9 @@ class SettingsPageMixin:
 
         def test_smtp():
             settings = self.settings
-            password = keyring.get_password("normastore", "smtp")
-            if not (
-                settings.smtp_host and settings.smtp_username and settings.smtp_from and password
-            ):
-                return messagebox.showerror(
-                    "SMTP",
-                    "Cần host, username, email gửi và App Password trong Windows Credential Manager.",
-                    parent=self,
-                )
-
             def send():
                 try:
-                    SmtpSender(
-                        settings.smtp_host,
-                        settings.smtp_port,
-                        settings.smtp_username,
-                        password,
-                        settings.smtp_starttls,
-                    ).send(
-                        settings.smtp_from,
-                        settings.smtp_from,
-                        "NormaStore SMTP test",
-                        "SMTP NormaStore đã cấu hình thành công.",
-                    )
+                    self.store.send_test_email()
                 except Exception as exc:
                     error_message = str(exc)
                     self.after(0, lambda: messagebox.showerror("SMTP", error_message, parent=self))

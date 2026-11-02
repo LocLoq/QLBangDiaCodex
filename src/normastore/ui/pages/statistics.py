@@ -10,10 +10,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from ttkbootstrap.constants import BOTH, END, LEFT, RIGHT, X
 
-from normastore.application.services import (
-    PageRequest,
-    SortSpec,
-)
+from normastore.application.contracts import PageRequest, SortSpec
 from normastore.domain.enums import (
     CopyStatus,
 )
@@ -145,13 +142,7 @@ class StatisticsPageMixin:
 
             def load_copies():
                 tree.delete(*tree.get_children())
-                result = self.call(
-                    lambda s: s.query_inventory(
-                        status,
-                        PageRequest(copy_page.get(), 50),
-                        SortSpec(str(copy_sort["field"]), bool(copy_sort["descending"])),
-                    )
-                )
+                result = self.store.query_inventory(status, PageRequest(copy_page.get(), 50), SortSpec(str(copy_sort['field']), bool(copy_sort['descending'])))
                 label.configure(
                     text=f"{result.total_items:,} bản đĩa trạng thái {status.value}".replace(
                         ",", "."
@@ -219,7 +210,7 @@ class StatisticsPageMixin:
 
         def current_report():
             start_on, end_on = report_dates()
-            return self.call(lambda s: s.operational_report(start_on, end_on))
+            return self.store.operational_report(start_on, end_on)
 
         def export_csv():
             path = filedialog.asksaveasfilename(

@@ -5,15 +5,8 @@ import numpy as np
 import pytest
 
 from normastore.application.ai_search import search_local
-from normastore.application.services import (
-    BusinessError,
-    CatalogFilters,
-    CheckoutLine,
-    PageRequest,
-    PaymentInput,
-    SortSpec,
-    StoreService,
-)
+from normastore.application.contracts import BusinessError, CatalogFilters, CheckoutLine, PageRequest, PaymentInput, SortSpec
+from normastore.application._operations import _StoreOperations
 from normastore.domain.enums import (
     CopyCondition,
     CopyStatus,
@@ -23,7 +16,7 @@ from normastore.domain.enums import (
     ReturnOutcome,
     RoleCode,
 )
-from normastore.infrastructure.database import (
+from normastore.infrastructure.database.models import (
     ContentEmbedding,
     Employee,
     ExternalReview,
@@ -37,6 +30,8 @@ from normastore.infrastructure.database import (
     ReputationEvent,
 )
 from normastore.jobs import process_notification_outbox
+from normastore.infrastructure.database.repositories.notifications import NotificationQueries
+from normastore.infrastructure.database.repositories.search import SearchRepository
 
 
 def manager_id(session) -> int:
@@ -44,7 +39,7 @@ def manager_id(session) -> int:
 
 
 def test_quote_requires_due_date(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status.value == "AVAILABLE")
@@ -53,7 +48,7 @@ def test_quote_requires_due_date(session):
 
 
 def test_list_customers_filters_by_name_or_phone(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.add_customer("Le Hoang Phuc", "0999888777")
 
     assert [row.id for row in service.list_customers("Hoang Phuc")] == [customer.id]
@@ -61,7 +56,7 @@ def test_list_customers_filters_by_name_or_phone(session):
 
 
 def test_active_rentals_lists_checked_out_copy(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status.value == "AVAILABLE")
@@ -82,7 +77,7 @@ def test_active_rentals_lists_checked_out_copy(session):
 
 
 def test_returnable_sales_only_includes_recent_sold_copy(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status.value == "AVAILABLE" and copy.can_sell)
@@ -103,7 +98,7 @@ def test_returnable_sales_only_includes_recent_sold_copy(session):
 
 
 def test_rental_to_sale_marks_copy_sold_and_applies_deposit(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status.value == "AVAILABLE" and copy.can_sell)
@@ -128,7 +123,7 @@ def test_rental_to_sale_marks_copy_sold_and_applies_deposit(session):
 
 
 def test_sale_return_moves_copy_to_inspection_and_records_refund(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status.value == "AVAILABLE" and copy.can_sell)
@@ -151,7 +146,7 @@ def test_sale_return_moves_copy_to_inspection_and_records_refund(session):
 
 
 def test_damaged_sale_return_requires_manager_and_can_apply_deduction(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     admin_id = session.query(Employee.id).first()[0]
     item = service.list_catalog()[0][0]
@@ -183,7 +178,7 @@ def test_damaged_sale_return_requires_manager_and_can_apply_deduction(session):
 
 
 def test_inspection_approves_returned_sale_copy_back_to_inventory(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status.value == "AVAILABLE" and copy.can_sell)
@@ -205,7 +200,7 @@ def test_inspection_approves_returned_sale_copy_back_to_inventory(session):
 
 
 def test_expired_hold_releases_copy_and_allocates_next_reservation(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer_one = service.list_customers()[0]
     customer_two = service.add_customer("Lê Ngọc Bích", "0999999001")
     item = service.list_catalog()[0][0]
@@ -229,7 +224,7 @@ def test_expired_hold_releases_copy_and_allocates_next_reservation(session):
 
 
 def test_notification_worker_sends_only_current_reminder_per_channel(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     session.query(NotificationOutbox).update({"status": NotificationStatus.SENT})
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
@@ -249,7 +244,7 @@ def test_notification_worker_sends_only_current_reminder_per_channel(session):
 
     delivered: list[tuple[str, str]] = []
     result = process_notification_outbox(
-        session,
+        NotificationQueries(session),
         send_email=lambda recipient, body: delivered.append((recipient, body)),
         send_sms=lambda phone, body: delivered.append((phone, body)),
     )
@@ -265,7 +260,7 @@ def test_notification_worker_sends_only_current_reminder_per_channel(session):
 
 
 def test_operational_report_excludes_active_deposits_from_rental_revenue(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     before = service.operational_report()
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
@@ -289,7 +284,7 @@ def test_operational_report_excludes_active_deposits_from_rental_revenue(session
 
 
 def test_dashboard_cash_flow_includes_refunds(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     employee_id = session.query(Employee.id).first()[0]
     before = service.dashboard()["cash_flow"]
@@ -316,7 +311,7 @@ def test_dashboard_cash_flow_includes_refunds(session):
 
 
 def test_operational_report_includes_net_cash_flow(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     employee_id = session.query(Employee.id).first()[0]
     before = service.operational_report(start_on=date.today(), end_on=date.today())
@@ -334,7 +329,7 @@ def test_operational_report_includes_net_cash_flow(session):
 
 
 def test_operational_report_lists_sales_stockouts_and_waiting_reservations(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customers = service.list_customers()
     employee_id = session.query(Employee.id).first()[0]
     item = service.save_catalog_item(manager_id(session), item_type="MOVIE", title="Phim báo cáo hết hàng")
@@ -370,7 +365,7 @@ def test_operational_report_lists_sales_stockouts_and_waiting_reservations(sessi
 
 
 def test_operational_report_filters_transaction_metrics_by_period(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     employee_id = session.query(Employee.id).first()[0]
     item = service.save_catalog_item(manager_id(session), item_type="MOVIE", title="Phim doanh thu kỳ cũ")
@@ -395,7 +390,7 @@ def test_operational_report_filters_transaction_metrics_by_period(session):
 
 
 def test_operational_report_counts_active_and_expired_premium_memberships(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     before = service.operational_report()
     active_customer = service.add_customer("Khách Premium mới", "0909100001")
     expired_customer = service.add_customer("Khách Premium cũ", "0909100002")
@@ -417,7 +412,7 @@ def test_operational_report_counts_active_and_expired_premium_memberships(sessio
 
 
 def test_activate_premium_records_payment(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     employee_id = session.query(Employee.id).first()[0]
 
@@ -432,7 +427,7 @@ def test_activate_premium_records_payment(session):
 
 
 def test_bulk_episodes_are_independent_items_grouped_by_show_and_season(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     show = service.create_show("Những ngày bình yên", actor_id=manager_id(session))
 
     episodes = service.add_episodes_bulk(show.id, 1, 1, 3, "Chương {number}", manager_id(session))
@@ -444,7 +439,7 @@ def test_bulk_episodes_are_independent_items_grouped_by_show_and_season(session)
 
 
 def test_list_show_episodes_groups_and_filters_by_season(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     show = service.create_show("Bộ phim chi tiết", actor_id=manager_id(session))
     first, second = service.add_episodes_bulk(show.id, 1, 1, 2, actor_id=manager_id(session))
     third, = service.add_episodes_bulk(show.id, 2, 1, 1, actor_id=manager_id(session))
@@ -462,7 +457,7 @@ def test_list_show_episodes_groups_and_filters_by_season(session):
 
 
 def test_premium_then_voucher_discount_is_capped_and_snapshotted(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status == CopyStatus.AVAILABLE)
@@ -489,7 +484,7 @@ def test_premium_then_voucher_discount_is_capped_and_snapshotted(session):
 
 
 def test_checkout_allocates_discount_to_lines_and_sale_return_uses_net_amount(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     before = service.operational_report()
     customer = service.list_customers()[0]
     employee_id = session.query(Employee.id).first()[0]
@@ -534,7 +529,7 @@ def test_checkout_allocates_discount_to_lines_and_sale_return_uses_net_amount(se
 
 
 def test_fixed_combo_applies_only_when_all_required_items_are_selected(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     second_item = service.save_catalog_item(manager_id(session), item_type="MOVIE", title="Phim ghép combo")
@@ -571,7 +566,7 @@ def test_fixed_combo_applies_only_when_all_required_items_are_selected(session):
 
 
 def test_show_episode_combo_applies_to_required_episodes(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     show = service.create_show("Bộ phim nhiều tập", actor_id=manager_id(session))
     episodes = service.add_episodes_bulk(show.id, 1, 1, 2, actor_id=manager_id(session))
@@ -590,7 +585,7 @@ def test_show_episode_combo_applies_to_required_episodes(session):
 
 
 def test_order_detail_lists_rented_item_and_due_date(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status == CopyStatus.AVAILABLE)
@@ -608,7 +603,7 @@ def test_order_detail_lists_rented_item_and_due_date(session):
 
 
 def test_description_search_and_today_recommendations_use_catalog(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     item = service.save_catalog_item(manager_id(session), item_type="MOVIE", title="Kỳ nghỉ mùa hè", overview="Câu chuyện gia đình vui nhộn bên bờ biển", vote_average=Decimal("8.5"))
     service.add_copy(item.id, "DVD-SEARCH-001", actor_id=manager_id(session))
 
@@ -621,7 +616,7 @@ def test_description_search_and_today_recommendations_use_catalog(session):
 
 
 def test_description_search_uses_cached_embedding_when_available(session, monkeypatch):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     first = service.save_catalog_item(manager_id(session), item_type="MOVIE", title="Bí ẩn trên núi", overview="Câu chuyện bí ẩn")
     second = service.save_catalog_item(manager_id(session), item_type="MOVIE", title="Bí ẩn dưới biển", overview="Câu chuyện bí ẩn")
     service.add_copy(first.id, "DVD-EMBED-001", actor_id=manager_id(session))
@@ -633,7 +628,7 @@ def test_description_search_uses_cached_embedding_when_available(session, monkey
     session.flush()
     monkeypatch.setattr("normastore.application.ai_search.GeminiSearch.embed", lambda _self, _text: np.array([0, 1], dtype=np.float32))
 
-    results = search_local(session, "đại dương mênh mông", "test-key")
+    results = search_local(SearchRepository(session), "đại dương mênh mông", "test-key")
 
     assert results[0].item_id == second.id
     assert results[0].source == "AI (Gemini)"
@@ -641,7 +636,7 @@ def test_description_search_uses_cached_embedding_when_available(session, monkey
 
 
 def test_catalog_metadata_returns_tmdb_genres_and_reviews(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     item = service.save_catalog_item(manager_id(session), item_type="MOVIE", title="Phim có metadata TMDB")
     genre = Genre(name="Phiêu lưu")
     session.add(genre)
@@ -665,7 +660,7 @@ def test_catalog_metadata_returns_tmdb_genres_and_reviews(session):
 
 
 def test_create_employee_account_assigns_requested_role(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
 
     actor_id = session.query(Employee.id).first()[0]
     employee = service.create_employee_account("Nguyễn Quốc Bảo", "0909999000", "bao.staff", RoleCode.STAFF, "matkhau123", actor_id)
@@ -676,7 +671,7 @@ def test_create_employee_account_assigns_requested_role(session):
 
 
 def test_manual_reputation_adjustment_is_clamped_and_audited(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     employee_id = session.query(Employee.id).first()[0]
     customer.reputation_score = 98
@@ -690,7 +685,7 @@ def test_manual_reputation_adjustment_is_clamped_and_audited(session):
 
 
 def test_return_records_deposit_refund_in_ledger(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status == CopyStatus.AVAILABLE)
@@ -708,7 +703,7 @@ def test_return_records_deposit_refund_in_ledger(session):
 
 
 def test_bulk_catalog_price_edit_updates_selected_items(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     first = service.list_catalog()[0][0]
     second = service.save_catalog_item(manager_id(session), item_type="MOVIE", title="Phim bulk edit")
     employee_id = session.query(Employee.id).first()[0]
@@ -723,7 +718,7 @@ def test_bulk_catalog_price_edit_updates_selected_items(session):
 
 
 def test_change_password_updates_authentication(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     account = service.authenticate("admin", "admin123")
     assert account is not None
 
@@ -735,7 +730,7 @@ def test_change_password_updates_authentication(session):
 
 
 def test_only_owner_or_manager_can_close_shift(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     actor_id = manager_id(session)
     owner = service.create_employee_account(
         "Vo Minh Tuan", "0909999013", "tuan.staff", RoleCode.STAFF, "matkhau123", actor_id
@@ -758,7 +753,7 @@ def test_only_owner_or_manager_can_close_shift(session):
 
 
 def test_staff_cannot_archive_catalog_items(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     actor_id = session.query(Employee.id).first()[0]
     employee = service.create_employee_account("Trần Hải Đăng", "0909999001", "dang.staff", RoleCode.STAFF, "matkhau123", actor_id)
     item = service.list_catalog()[0][0]
@@ -769,7 +764,7 @@ def test_staff_cannot_archive_catalog_items(session):
 
 
 def test_staff_cannot_mutate_catalog_or_inventory(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     actor_id = manager_id(session)
     staff = service.create_employee_account(
         "Bui Quang Huy", "0909999012", "huy.staff", RoleCode.STAFF, "matkhau123", actor_id
@@ -788,7 +783,7 @@ def test_staff_cannot_mutate_catalog_or_inventory(session):
 
 
 def test_staff_cannot_adjust_customer_reputation(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     actor_id = session.query(Employee.id).first()[0]
     employee = service.create_employee_account("Lê Hoài Nam", "0909999002", "nam.staff", RoleCode.STAFF, "matkhau123", actor_id)
     customer = service.list_customers()[0]
@@ -799,7 +794,7 @@ def test_staff_cannot_adjust_customer_reputation(session):
 
 
 def test_staff_cannot_create_voucher(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     actor_id = session.query(Employee.id).first()[0]
     employee = service.create_employee_account("Đỗ Minh Anh", "0909999003", "anh.staff", RoleCode.STAFF, "matkhau123", actor_id)
 
@@ -809,7 +804,7 @@ def test_staff_cannot_create_voucher(session):
 
 
 def test_staff_cannot_extend_overdue_rental(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     admin_id = session.query(Employee.id).first()[0]
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
@@ -830,7 +825,7 @@ def test_staff_cannot_extend_overdue_rental(session):
 
 
 def test_staff_cannot_extend_rental_with_waiting_reservation(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     admin_id = session.query(Employee.id).first()[0]
     customers = service.list_customers()
     customer = customers[0]
@@ -854,7 +849,7 @@ def test_staff_cannot_extend_rental_with_waiting_reservation(session):
 
 
 def test_customer_recommendations_exclude_previously_rented_item(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     first = service.list_catalog()[0][0]
     first_copy = next(copy for copy in service.catalog_item(first.id).copies if copy.status == CopyStatus.AVAILABLE)
@@ -872,7 +867,7 @@ def test_customer_recommendations_exclude_previously_rented_item(session):
 
 
 def test_list_notifications_returns_customer_and_delivery_state(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status == CopyStatus.AVAILABLE)
@@ -887,7 +882,7 @@ def test_list_notifications_returns_customer_and_delivery_state(session):
 
 
 def test_description_search_excludes_item_without_available_copy(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     unavailable = service.save_catalog_item(manager_id(session), item_type="MOVIE", title="Phim bí mật", overview="Câu chuyện bí mật")
     copy = service.add_copy(unavailable.id, "DVD-UNAVAILABLE-001", actor_id=manager_id(session))
     copy.status = CopyStatus.RENTED
@@ -902,7 +897,7 @@ def test_description_search_excludes_item_without_available_copy(session):
 
 
 def test_checkout_rejects_negative_payment(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status == CopyStatus.AVAILABLE)
@@ -914,7 +909,7 @@ def test_checkout_rejects_negative_payment(session):
 
 
 def test_catalog_query_counts_rent_and_sale_and_pages_globally(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     actor = manager_id(session)
     rent_only = service.save_catalog_item(actor, item_type="MOVIE", title="AAA chỉ thuê", can_sell=False)
     sale_only = service.save_catalog_item(actor, item_type="MOVIE", title="ZZZ chỉ mua", can_rent=False)
@@ -937,7 +932,7 @@ def test_catalog_query_counts_rent_and_sale_and_pages_globally(session):
 
 
 def test_choose_checkout_copy_returns_scalar_choice_for_requested_action(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     actor = manager_id(session)
     item = service.save_catalog_item(actor, item_type="MOVIE", title="Chọn đĩa an toàn", can_sell=False)
     copy = service.add_copy(item.id, "CHOICE-RENT-001", actor_id=actor)

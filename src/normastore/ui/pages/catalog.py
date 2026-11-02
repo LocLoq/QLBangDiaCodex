@@ -7,12 +7,7 @@ from tkinter import messagebox, simpledialog, ttk
 import ttkbootstrap as tb
 from ttkbootstrap.constants import BOTH, END, LEFT, RIGHT, X, Y
 
-from normastore.application.services import (
-    CatalogFilters,
-    PagedResult,
-    PageRequest,
-    SortSpec,
-)
+from normastore.application.contracts import CatalogFilters, PagedResult, PageRequest, SortSpec
 from normastore.domain.enums import (
     CopyCondition,
     CopyStatus,
@@ -71,9 +66,9 @@ class CatalogPageMixin:
         )
         show_filter, season_filter = tk.StringVar(), tk.StringVar()
         genres = {"Tất cả thể loại": None}
-        genres.update({genre.name: genre.id for genre in self.call(lambda s: s.list_genres())})
+        genres.update({genre.name: genre.id for genre in self.store.list_genres()})
         shows = {"Tất cả bộ": None}
-        shows.update({show.title: show.show_id for show in self.call(lambda s: s.list_shows())})
+        shows.update({show.title: show.show_id for show in self.store.list_shows()})
 
         def toggle_advanced():
             if advanced_visible.get():
@@ -256,7 +251,7 @@ class CatalogPageMixin:
                         pady=8
                     )
 
-            self.call_async(lambda s: s.search_by_description_response(description), show_results)
+            self._run_async(lambda: self.store.search_by_description_response(description), show_results)
 
         def decimal_value(value: str) -> Decimal | None:
             try:
@@ -301,11 +296,7 @@ class CatalogPageMixin:
                 str(sort_state["field"]), str(sort_state["field"])
             )
             sort = SortSpec(sort_field, bool(sort_state["descending"]))
-            result = self.call(
-                lambda s: s.query_catalog(
-                    catalog_filters(), PageRequest(page_number.get(), 48), sort
-                )
-            )
+            result = self.store.query_catalog(catalog_filters(), PageRequest(page_number.get(), 48), sort)
             pager_update(result)
             for index, item in enumerate(result.items):
                 rows[str(item.item_id)] = item
@@ -389,12 +380,12 @@ class CatalogPageMixin:
         def selected():
             ids = tree.selection()
             row = rows.get(ids[0]) if ids else None
-            return self.call(lambda s: s.catalog_item(row.item_id)) if row else None
+            return self.store.catalog_item(row.item_id) if row else None
 
         def show_detail(_event=None):
             item = selected()
             if item:
-                genres, reviews = self.call(lambda s: s.catalog_metadata(item.id))
+                genres, reviews = self.store.catalog_metadata(item.id)
                 genres_text = ", ".join(genres) or "Chưa có"
                 reviews_text = (
                     "\n".join(
@@ -461,7 +452,7 @@ class CatalogPageMixin:
                         deposit_amount=Decimal(values["deposit_amount"].get()),
                         replacement_value=Decimal(values["sale_price"].get()),
                     )
-                    self.call(lambda s: s.save_catalog_item(self.account.employee_id, **data), True)
+                    self.store.save_catalog_item(self.account.employee_id, **data)
                     dialog.destroy()
                     refresh()
                 except Exception as exc:
@@ -496,17 +487,7 @@ class CatalogPageMixin:
 
             def save():
                 try:
-                    self.call(
-                        lambda s: s.add_copy(
-                            item.id,
-                            barcode.get(),
-                            media.get(),
-                            self.account.employee_id,
-                            can_rent.get(),
-                            can_sell.get(),
-                        ),
-                        True,
-                    )
+                    self.store.add_copy(item.id, barcode.get(), media.get(), self.account.employee_id, can_rent.get(), can_sell.get())
                     dialog.destroy()
                     refresh()
                 except Exception as exc:
@@ -526,7 +507,7 @@ class CatalogPageMixin:
                 or ""
             )
             try:
-                self.call(lambda s: s.create_show(title, overview, self.account.employee_id), True)
+                self.store.create_show(title, overview, self.account.employee_id)
                 messagebox.showinfo(
                     "Phim bộ", "Đã tạo bộ phim. Bây giờ có thể thêm tập hàng loạt.", parent=self
                 )
@@ -534,7 +515,7 @@ class CatalogPageMixin:
                 messagebox.showerror("Phim bộ", str(exc), parent=self)
 
         def show_details():
-            shows = self.call(lambda s: s.list_shows())
+            shows = self.store.list_shows()
             if not shows:
                 return messagebox.showinfo("Bộ phim", "Chưa có bộ phim nào.", parent=self)
             dialog = tb.Toplevel(self)
@@ -595,7 +576,7 @@ class CatalogPageMixin:
                     if selected_season.startswith("Mùa ")
                     else None
                 )
-                rows = self.call(lambda s: s.list_show_episodes(current_show_id, season_number))
+                rows = self.store.list_show_episodes(current_show_id, season_number)
                 episodes.delete(*episodes.get_children())
                 for episode in rows:
                     episodes.insert(
@@ -618,7 +599,7 @@ class CatalogPageMixin:
                     return
                 current_show_id = int(selection[0])
                 show = by_id[selection[0]]
-                all_episodes = self.call(lambda s: s.list_show_episodes(current_show_id))
+                all_episodes = self.store.list_show_episodes(current_show_id)
                 seasons = [
                     f"Mùa {number}"
                     for number in sorted({entry.season_number for entry in all_episodes})
@@ -638,7 +619,7 @@ class CatalogPageMixin:
         def bulk_episodes():
             shows = {
                 f"{show.show_id} — {show.title}": show
-                for show in self.call(lambda s: s.list_shows())
+                for show in self.store.list_shows()
             }
             if not shows:
                 return messagebox.showinfo("Tập phim", "Hãy thêm bộ phim trước.", parent=self)
@@ -675,17 +656,7 @@ class CatalogPageMixin:
             def save_bulk():
                 try:
                     show = shows[show_var.get()]
-                    count = self.call(
-                        lambda s: s.add_episodes_bulk(
-                            show.show_id,
-                            int(season_var.get()),
-                            int(first_var.get()),
-                            int(last_var.get()),
-                            title_var.get(),
-                            self.account.employee_id,
-                        ),
-                        True,
-                    )
+                    count = self.store.add_episodes_bulk(show.show_id, int(season_var.get()), int(first_var.get()), int(last_var.get()), title_var.get(), self.account.employee_id)
                     dialog.destroy()
                     refresh()
                     messagebox.showinfo("Tập phim", f"Đã thêm {len(count)} tập phim.", parent=self)
@@ -699,7 +670,7 @@ class CatalogPageMixin:
         def archive():
             ids = [int(i) for i in tree.selection()]
             if ids and messagebox.askyesno("Lưu trữ", f"Lưu trữ {len(ids)} item đã chọn?"):
-                self.call(lambda s: s.archive_items(ids, self.account.employee_id), True)
+                self.store.archive_items(ids, self.account.employee_id)
                 refresh()
 
         def bulk_prices():
@@ -718,16 +689,7 @@ class CatalogPageMixin:
                 "Sửa hàng loạt", "Tiền cọc mới (để trống để giữ nguyên):", parent=self
             )
             try:
-                count = self.call(
-                    lambda s: s.bulk_update_catalog_prices(
-                        ids,
-                        self.account.employee_id,
-                        Decimal(rental) if rental else None,
-                        Decimal(sale) if sale else None,
-                        Decimal(deposit) if deposit else None,
-                    ),
-                    True,
-                )
+                count = self.store.bulk_update_catalog_prices(ids, self.account.employee_id, Decimal(rental) if rental else None, Decimal(sale) if sale else None, Decimal(deposit) if deposit else None)
                 messagebox.showinfo("Sửa hàng loạt", f"Đã cập nhật {count} item.", parent=self)
                 refresh()
             except Exception as exc:

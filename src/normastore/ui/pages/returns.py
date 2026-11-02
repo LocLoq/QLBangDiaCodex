@@ -8,11 +8,7 @@ from tkinter import messagebox, simpledialog, ttk
 import ttkbootstrap as tb
 from ttkbootstrap.constants import BOTH, END, LEFT, RIGHT, X
 
-from normastore.application.services import (
-    PageRequest,
-    PaymentInput,
-    SortSpec,
-)
+from normastore.application.contracts import PageRequest, PaymentInput, SortSpec
 from normastore.domain.enums import (
     CopyCondition,
     PaymentMethod,
@@ -51,12 +47,7 @@ class ReturnsPageMixin:
         def refresh():
             tree.delete(*tree.get_children())
             rows.clear()
-            result = self.call(
-                lambda s: s.query_active_rentals(
-                    PageRequest(page_number.get(), 50),
-                    SortSpec(str(sort_state["field"]), bool(sort_state["descending"])),
-                )
-            )
+            result = self.store.query_active_rentals(PageRequest(page_number.get(), 50), SortSpec(str(sort_state['field']), bool(sort_state['descending'])))
             pager_update(result)
             for rental in result.items:
                 rows[str(rental.term_id)] = rental
@@ -95,18 +86,7 @@ class ReturnsPageMixin:
                 )
                 if method is None:
                     return
-                balance = self.call(
-                    lambda s: s.return_rentals(
-                        self.account.employee_id,
-                        selected[0].customer_id,
-                        [
-                            (rental.term_id, ReturnOutcome(outcome.get()), note.get())
-                            for rental in selected
-                        ],
-                        PaymentInput(method, Decimal(paid)),
-                    ),
-                    True,
-                )
+                balance = self.store.return_rentals(self.account.employee_id, selected[0].customer_id, [(rental.term_id, ReturnOutcome(outcome.get()), note.get()) for rental in selected], PaymentInput(method, Decimal(paid)))
                 messagebox.showinfo(
                     "Trả đĩa", f"Số dư sau khi cấn cọc: {vnd(balance)}", parent=self
                 )
@@ -126,7 +106,7 @@ class ReturnsPageMixin:
             if not rental:
                 return
             try:
-                self.call(lambda s: s.extend_rental(rental.term_id, self.account.employee_id), True)
+                self.store.extend_rental(rental.term_id, self.account.employee_id)
                 messagebox.showinfo(
                     "Gia hạn", "Đã gia hạn thêm 3 ngày và ghi nhận phí thuê.", parent=self
                 )
@@ -147,14 +127,7 @@ class ReturnsPageMixin:
             if method is None:
                 return
             try:
-                order = self.call(
-                    lambda s: s.rental_to_sale(
-                        rental.term_id,
-                        self.account.employee_id,
-                        PaymentInput(method, Decimal(amount)),
-                    ),
-                    True,
-                )
+                order = self.store.rental_to_sale(rental.term_id, self.account.employee_id, PaymentInput(method, Decimal(amount)))
                 messagebox.showinfo(
                     "Chuyển thành mua", f"Đã tạo phiếu bán {order.code} và cấn cọc.", parent=self
                 )
@@ -186,7 +159,7 @@ class ReturnsPageMixin:
             def load_sales():
                 sale_tree.delete(*sale_tree.get_children())
                 sales.clear()
-                for sale in self.call(lambda s: s.returnable_sales()):
+                for sale in self.store.returnable_sales():
                     sales[str(sale.line_id)] = sale
                     sale_tree.insert(
                         "",
@@ -236,16 +209,7 @@ class ReturnsPageMixin:
                         or ""
                     )
                 try:
-                    refund = self.call(
-                        lambda s: s.return_sale(
-                            int(selection[0]),
-                            self.account.employee_id,
-                            condition=condition,
-                            deduction=deduction,
-                            note=note,
-                        ),
-                        True,
-                    )
+                    refund = self.store.return_sale(int(selection[0]), self.account.employee_id, condition=condition, deduction=deduction, note=note)
                     messagebox.showinfo(
                         "Trả hàng bán",
                         f"Đã hoàn {vnd(refund)}. Đĩa chuyển sang chờ kiểm tra.",

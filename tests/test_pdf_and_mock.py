@@ -3,9 +3,10 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
-from normastore.application.services import CheckoutLine, PaymentInput, StoreService
+from normastore.application.contracts import CheckoutLine, PaymentInput
+from normastore.application._operations import _StoreOperations
 from normastore.domain.enums import CopyStatus, LineAction, PaymentMethod
-from normastore.infrastructure.database import (
+from normastore.infrastructure.database.models import (
     AuditLog,
     Employee,
     Order,
@@ -17,7 +18,7 @@ from normastore.infrastructure.pdf_receipts import PdfReceiptExporter
 
 
 def test_receipt_pdf_contains_scalar_order_data(session, tmp_path):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     customer = service.list_customers()[0]
     item = service.list_catalog()[0][0]
     copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status == CopyStatus.AVAILABLE)
@@ -46,7 +47,7 @@ def test_receipt_pdf_contains_scalar_order_data(session, tmp_path):
 
 
 def test_voucher_summary_reports_effective_state(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     employee_id = session.scalar(select(Employee.id).limit(1))
     service.create_voucher("PDF-ACTIVE", percent_off=Decimal("10"), actor_id=employee_id)
     service.create_voucher(
@@ -62,7 +63,7 @@ def test_voucher_summary_reports_effective_state(session):
 
 
 def test_mock_day_never_sells_copy_without_permission(session):
-    service = StoreService(session)
+    service = _StoreOperations(session)
     employee_id = session.scalar(select(Employee.id).limit(1))
     copy = session.scalar(select(PhysicalCopy).where(PhysicalCopy.status == CopyStatus.AVAILABLE))
     assert copy is not None
@@ -96,8 +97,8 @@ def test_mock_day_skips_voucher_expired_when_seed_runs(session, monkeypatch):
         def randrange(self, _stop):
             return 0
 
-    monkeypatch.setattr("normastore.application.services.Random", AlwaysSelectVoucher)
-    service = StoreService(session)
+    monkeypatch.setattr("normastore.application._operations.Random", AlwaysSelectVoucher)
+    service = _StoreOperations(session)
     employee_id = session.scalar(select(Employee.id).limit(1))
     business_date = date.today() - timedelta(days=2)
     session.add(Voucher(

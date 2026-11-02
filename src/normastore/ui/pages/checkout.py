@@ -7,19 +7,13 @@ from tkinter import messagebox, simpledialog, ttk
 
 from ttkbootstrap.constants import BOTH, END, LEFT, RIGHT, X, Y
 
-from normastore.application.services import (
-    CatalogFilters,
-    CheckoutLine,
-    PageRequest,
-    PaymentInput,
-    SortSpec,
-)
+from normastore.application.contracts import CatalogFilters, CheckoutLine, PageRequest, PaymentInput, SortSpec
 from normastore.domain.enums import (
     CopyCondition,
     CopyStatus,
     LineAction,
 )
-from normastore.infrastructure.database import Customer
+from normastore.application.contracts import CustomerView
 from normastore.ui.formatting import catalog_tooltip_text, vnd
 from normastore.ui.tooltips import Tooltip, TreeviewTooltip
 
@@ -106,11 +100,11 @@ class CheckoutPageMixin:
         )
         picker_genres = {"Tất cả thể loại": None}
         picker_genres.update(
-            {genre.name: genre.id for genre in self.call(lambda s: s.list_genres())}
+            {genre.name: genre.id for genre in self.store.list_genres()}
         )
         picker_shows = {"Tất cả bộ": None}
         picker_shows.update(
-            {show.title: show.show_id for show in self.call(lambda s: s.list_shows())}
+            {show.title: show.show_id for show in self.store.list_shows()}
         )
 
         def toggle_picker_advanced():
@@ -209,14 +203,14 @@ class CheckoutPageMixin:
         buttons.pack(fill=X)
         cart_lines: list[CheckoutLine] = []
         catalog_rows = {}
-        customers: dict[str, Customer] = {}
+        customers: dict[str, CustomerView] = {}
         combos = {}
 
         def refresh_customers(*_args):
             selected = customer_var.get()
             customers.clear()
             values = []
-            for customer in self.call(lambda s: s.list_customers(customer_search_var.get())):
+            for customer in self.store.list_customers(customer_search_var.get()):
                 key = f"{customer.id} — {customer.full_name} ({customer.phone})"
                 customers[key] = customer
                 values.append(key)
@@ -225,7 +219,7 @@ class CheckoutPageMixin:
                 customer_var.set(values[0] if not selected and values else "")
             combos.clear()
             combo_values = ["Không dùng combo"]
-            for combo in self.call(lambda s: s.list_combos()):
+            for combo in self.store.list_combos():
                 key = f"{combo.combo_id} — {combo.name} ({vnd(combo.discount_amount)})"
                 combos[key] = combo
                 combo_values.append(key)
@@ -236,7 +230,7 @@ class CheckoutPageMixin:
                 "",
                 *[
                     voucher.code
-                    for voucher in self.call(lambda s: s.list_vouchers())
+                    for voucher in self.store.list_vouchers()
                     if voucher.effective_state == "Đang hiệu lực"
                 ],
             ]
@@ -289,13 +283,7 @@ class CheckoutPageMixin:
             field = {"#0": "title", "rent": "rental_price", "buy": "sale_price"}.get(
                 str(picker_sort["field"]), str(picker_sort["field"])
             )
-            result = self.call(
-                lambda s: s.query_catalog(
-                    picker_catalog_filters(),
-                    PageRequest(picker_page.get(), 48),
-                    SortSpec(field, bool(picker_sort["descending"])),
-                )
-            )
+            result = self.store.query_catalog(picker_catalog_filters(), PageRequest(picker_page.get(), 48), SortSpec(field, bool(picker_sort['descending'])))
             picker_pager(result)
             for index, item in enumerate(result.items):
                 catalog_rows[str(item.item_id)] = item
@@ -385,7 +373,7 @@ class CheckoutPageMixin:
                 )
             try:
                 used = {line.copy_id for line in cart_lines}
-                choice = self.call(lambda s: s.choose_checkout_copy(item_id, action, used))
+                choice = self.store.choose_checkout_copy(item_id, action, used)
                 if not choice:
                     return messagebox.showinfo(
                         "Phiếu", "Không còn bản đĩa phù hợp cho thao tác này.", parent=self
@@ -416,11 +404,7 @@ class CheckoutPageMixin:
                 total_var.set("Tổng cần thu: 0 đ")
                 return
             try:
-                quote = self.call(
-                    lambda s: s.quote(
-                        customer.id, cart_lines, voucher_var.get() or None, combo_ids()
-                    )
-                )
+                quote = self.store.quote(customer.id, cart_lines, voucher_var.get() or None, combo_ids())
                 total_var.set(f"Tổng cần thu: {vnd(quote.total_due)} (cọc {vnd(quote.deposit)})")
             except Exception as exc:
                 total_var.set(f"Kiểm tra: {exc}")
@@ -442,11 +426,7 @@ class CheckoutPageMixin:
             if not self.current_shift:
                 return messagebox.showerror("Phiếu", "Cần mở ca trước khi lập phiếu.", parent=self)
             try:
-                quote = self.call(
-                    lambda s: s.quote(
-                        customer.id, cart_lines, voucher_var.get() or None, combo_ids()
-                    )
-                )
+                quote = self.store.quote(customer.id, cart_lines, voucher_var.get() or None, combo_ids())
                 received = simpledialog.askstring(
                     "Thanh toán",
                     f"Số tiền nhận (mặc định {quote.total_due:,.0f}):",
@@ -458,18 +438,7 @@ class CheckoutPageMixin:
                 method = self._choose_payment_method("Thanh toán", self)
                 if method is None:
                     return
-                order = self.call(
-                    lambda s: s.checkout(
-                        customer.id,
-                        self.account.employee_id,
-                        self.current_shift.id,
-                        cart_lines,
-                        [PaymentInput(method, Decimal(received))],
-                        voucher_var.get() or None,
-                        combo_ids(),
-                    ),
-                    True,
-                )
+                order = self.store.checkout(customer.id, self.account.employee_id, self.current_shift.id, cart_lines, [PaymentInput(method, Decimal(received))], voucher_var.get() or None, combo_ids())
                 messagebox.showinfo("Hoàn tất", f"Đã tạo phiếu {order.code}.", parent=self)
                 cart_lines.clear()
                 cart.delete(*cart.get_children())

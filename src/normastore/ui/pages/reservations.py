@@ -5,11 +5,7 @@ from tkinter import messagebox, ttk
 
 from ttkbootstrap.constants import BOTH, END, LEFT, X
 
-from normastore.application.services import (
-    CatalogFilters,
-    PageRequest,
-    SortSpec,
-)
+from normastore.application.contracts import CatalogFilters, PageRequest, SortSpec
 from normastore.ui.formatting import vnd
 
 
@@ -72,7 +68,7 @@ class ReservationsPageMixin:
                 previous = customer_var.get()
                 values = []
                 customers.clear()
-                for customer in self.call(lambda s: s.list_customers(customer_search_var.get())):
+                for customer in self.store.list_customers(customer_search_var.get()):
                     key = f"{customer.id} — {customer.full_name} ({customer.phone})"
                     customers[key] = customer
                     values.append(key)
@@ -88,13 +84,7 @@ class ReservationsPageMixin:
                 field = {"#0": "title", "stock": "rentable_copies"}.get(
                     str(item_sort["field"]), str(item_sort["field"])
                 )
-                result = self.call(
-                    lambda s: s.query_catalog(
-                        CatalogFilters(text=search_var.get(), item_rentable=True),
-                        PageRequest(item_page.get(), 48),
-                        SortSpec(field, bool(item_sort["descending"])),
-                    )
-                )
+                result = self.store.query_catalog(CatalogFilters(text=search_var.get(), item_rentable=True), PageRequest(item_page.get(), 48), SortSpec(field, bool(item_sort['descending'])))
                 item_pager(result)
                 for index, item in enumerate(result.items):
                     picker.insert(
@@ -148,7 +138,7 @@ class ReservationsPageMixin:
                         "Đặt trước", "Hãy chọn khách hàng và ít nhất một phim/tập.", parent=dialog
                     )
                 try:
-                    self.call(lambda s: s.reserve(customer.id, ids, self.account.employee_id), True)
+                    self.store.reserve(customer.id, ids, self.account.employee_id)
                     dialog.destroy()
                     refresh()
                 except Exception as exc:
@@ -177,14 +167,9 @@ class ReservationsPageMixin:
             load_items()
 
         def refresh():
-            self.call(lambda s: s.expire_reservation_holds(), True)
+            self.store.expire_reservation_holds()
             tree.delete(*tree.get_children())
-            result = self.call(
-                lambda s: s.query_reservations(
-                    PageRequest(page_number.get(), 50),
-                    SortSpec(str(sort_state["field"]), bool(sort_state["descending"])),
-                )
-            )
+            result = self.store.query_reservations(PageRequest(page_number.get(), 50), SortSpec(str(sort_state['field']), bool(sort_state['descending'])))
             pager(result)
             for reservation in result.items:
                 tree.insert(
