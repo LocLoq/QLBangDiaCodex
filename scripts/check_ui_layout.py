@@ -4,6 +4,7 @@ r"""Manual UI smoke test for all main pages at the supported minimum viewport.
 Run while Laragon/MySQL is available:
     C:\laragon\bin\python\python-3.13\python.exe scripts\check_ui_layout.py
 """
+
 from __future__ import annotations
 
 import sys
@@ -59,6 +60,23 @@ def _visible_overflow(root: tk.Misc, container: tk.Misc) -> list[str]:
     return problems
 
 
+def _treeview_alignment(container: tk.Misc) -> list[str]:
+    problems: list[str] = []
+
+    def visit(widget: tk.Misc) -> None:
+        for child in widget.winfo_children():
+            if child.winfo_class() == "Treeview":
+                for column in ("#0", *child["columns"]):
+                    if child.column(column, "anchor") != "center":
+                        problems.append(f"{child.winfo_name()}/{column}: cell anchor")
+                    if child.heading(column, "anchor") != "center":
+                        problems.append(f"{child.winfo_name()}/{column}: heading anchor")
+            visit(child)
+
+    visit(container)
+    return problems
+
+
 def main() -> int:
     settings = Settings()
     factory = bootstrap(settings)
@@ -76,6 +94,14 @@ def main() -> int:
         app.state("normal")
         app.geometry("1366x768+0+0")
         app.update()
+        content_geometry = (app.content.winfo_rootx(), app.content.winfo_width())
+        app._open_drawer(temporary=True)
+        app.update()
+        if not app.drawer.winfo_ismapped():
+            failures.append("drawer không mở")
+        if content_geometry != (app.content.winfo_rootx(), app.content.winfo_width()):
+            failures.append("drawer làm thay đổi hình học nội dung")
+        app._close_drawer()
         for font_scale in ("Vừa", "Lớn"):
             app.font_scale.set(font_scale)
             app._set_font_scale()
@@ -89,6 +115,9 @@ def main() -> int:
                     overflow = _visible_overflow(app, app.content)
                     if overflow:
                         failures.append(f"{font_scale}/{page_name}: " + " | ".join(overflow[:8]))
+                    alignment = _treeview_alignment(app.content)
+                    if alignment:
+                        failures.append(f"{font_scale}/{page_name}: " + " | ".join(alignment[:8]))
                 except Exception as exc:  # smoke runner must continue through all pages
                     failures.append(f"{font_scale}/{page_name}: {type(exc).__name__}: {exc}")
         app.dark_mode.set(True)

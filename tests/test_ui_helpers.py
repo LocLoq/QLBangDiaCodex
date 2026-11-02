@@ -6,6 +6,7 @@ from matplotlib.figure import Figure
 from normastore.config import Settings
 from normastore.ui.theme import AppearanceMixin, _load_preferences, _preferences_path, theme_palette
 from normastore.ui.tooltips import tooltip_position
+from normastore.ui.widgets import CommonWidgetsMixin
 
 
 def test_tooltip_position_flips_and_clamps_at_virtual_screen_edges():
@@ -54,3 +55,47 @@ def test_figure_restyles_after_axis_clear():
     assert figure.get_facecolor()[:3] == (43 / 255, 62 / 255, 80 / 255)
     assert axis.get_facecolor()[:3] == (43 / 255, 62 / 255, 80 / 255)
     assert axis.title.get_color() == "#F8FAFC"
+
+
+def test_treeview_factory_centers_tree_and_value_columns(monkeypatch):
+    calls = []
+
+    class FakeTree:
+        def __init__(self, parent, **kwargs):
+            self.kwargs = kwargs
+
+        def __getitem__(self, key):
+            assert key == "columns"
+            return self.kwargs["columns"]
+
+        def column(self, column, **kwargs):
+            calls.append(("column", column, kwargs))
+
+        def heading(self, column, **kwargs):
+            calls.append(("heading", column, kwargs))
+
+    monkeypatch.setattr("normastore.ui.widgets.ttk.Treeview", FakeTree)
+
+    tree = CommonWidgetsMixin._create_treeview(
+        object(),
+        object(),
+        columns=("first", "second"),
+        show="headings",
+        height=4,
+        selectmode="extended",
+    )
+
+    assert tree.kwargs == {
+        "columns": ("first", "second"),
+        "show": "headings",
+        "height": 4,
+        "selectmode": "extended",
+    }
+    assert calls == [
+        ("column", "#0", {"anchor": "center"}),
+        ("heading", "#0", {"anchor": "center"}),
+        ("column", "first", {"anchor": "center"}),
+        ("heading", "first", {"anchor": "center"}),
+        ("column", "second", {"anchor": "center"}),
+        ("heading", "second", {"anchor": "center"}),
+    ]

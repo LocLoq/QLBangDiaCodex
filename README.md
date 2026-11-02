@@ -15,8 +15,7 @@ Tiến độ và các điều kiện còn thiếu được ghi ở [IMPLEMENTATI
 - Mở/đóng ca; chỉ chủ ca hoặc Quản lý/Quản trị viên được đóng ca.
 
 ## Khởi động
-
-Yêu cầu MySQL trong Laragon đang chạy trên `127.0.0.1:3306`, user `root` không mật khẩu.
+Yêu cầu MySQL trong Laragon (cài đặt laragon) đang chạy trên `127.0.0.1:3306`, user `root` không mật khẩu.
 
 ```powershell
 $py = 'C:\laragon\bin\python\python-3.13\python.exe'

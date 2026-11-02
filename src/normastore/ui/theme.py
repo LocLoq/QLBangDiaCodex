@@ -123,6 +123,9 @@ class AppearanceMixin:
         self.style.configure("Norma.Tooltip.TLabel", background=palette.tooltip_background, foreground=palette.tooltip_foreground, bordercolor=palette.border, relief="solid")
         self.style.configure("TCombobox", padding=(6, 4))
         self.style.configure("TButton", padding=(8, 5))
+        refresh_navigation_icons = getattr(self, "_refresh_navigation_icons", None)
+        if refresh_navigation_icons:
+            refresh_navigation_icons()
         for canvas in self._theme_canvases:
             if canvas.winfo_exists():
                 canvas.configure(background=palette.background)

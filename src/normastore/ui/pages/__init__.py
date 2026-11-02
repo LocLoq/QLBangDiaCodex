@@ -16,8 +16,18 @@ from normastore.ui.pages.shifts import ShiftsPageMixin
 from normastore.ui.pages.statistics import StatisticsPageMixin
 
 __all__ = [
-    "AuditPageMixin", "CatalogPageMixin", "CheckoutPageMixin", "CustomersPageMixin",
-    "DashboardPageMixin", "InventoryPageMixin", "NotificationsPageMixin", "OrdersPageMixin",
-    "PromotionsPageMixin", "ReservationsPageMixin", "ReturnsPageMixin", "SettingsPageMixin",
-    "ShiftsPageMixin", "StatisticsPageMixin",
+    "AuditPageMixin",
+    "CatalogPageMixin",
+    "CheckoutPageMixin",
+    "CustomersPageMixin",
+    "DashboardPageMixin",
+    "InventoryPageMixin",
+    "NotificationsPageMixin",
+    "OrdersPageMixin",
+    "PromotionsPageMixin",
+    "ReservationsPageMixin",
+    "ReturnsPageMixin",
+    "SettingsPageMixin",
+    "ShiftsPageMixin",
+    "StatisticsPageMixin",
 ]

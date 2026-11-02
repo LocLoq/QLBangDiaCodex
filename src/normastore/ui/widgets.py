@@ -11,6 +11,14 @@ from normastore.domain.enums import PaymentMethod
 
 
 class CommonWidgetsMixin:
+    def _create_treeview(self, parent, **kwargs) -> ttk.Treeview:
+        """Create a table whose headings and values use the app-wide alignment."""
+        tree = ttk.Treeview(parent, **kwargs)
+        for column in ("#0", *tree["columns"]):
+            tree.column(column, anchor=tk.CENTER)
+            tree.heading(column, anchor=tk.CENTER)
+        return tree
+
     def _debounce(self, holder: dict[str, str], callback: Callable, delay: int = 250) -> None:
         previous = holder.get("after")
         if previous:
@@ -27,7 +35,9 @@ class CommonWidgetsMixin:
         dialog.minsize(min(width, 560), min(height, 360))
         dialog.resizable(True, True)
         dialog.update_idletasks()
-        dialog.geometry(f"+{max(0, (screen_width - width) // 2)}+{max(0, (screen_height - height) // 2)}")
+        dialog.geometry(
+            f"+{max(0, (screen_width - width) // 2)}+{max(0, (screen_height - height) // 2)}"
+        )
         if modal:
             dialog.grab_set()
         return dialog
@@ -41,7 +51,9 @@ class CommonWidgetsMixin:
         ttk.Separator(parent).pack(fill=X, pady=(0, 8))
         return bar
 
-    def _install_sortable_headings(self, tree, titles: dict[str, str], state: dict[str, object], reload_page) -> Callable[[], None]:
+    def _install_sortable_headings(
+        self, tree, titles: dict[str, str], state: dict[str, object], reload_page
+    ) -> Callable[[], None]:
         def draw() -> None:
             for column, title in titles.items():
                 marker = ""
@@ -69,9 +81,11 @@ class CommonWidgetsMixin:
         label = ttk.Label(bar, text="Trang 1/1 • 0 kết quả", bootstyle="secondary")
         next_button = ttk.Button(bar, text="Sau ›", bootstyle="secondary")
         last = ttk.Button(bar, text="Cuối »", bootstyle="secondary")
-        first.pack(side=LEFT, padx=(0, 3)); previous.pack(side=LEFT, padx=3)
+        first.pack(side=LEFT, padx=(0, 3))
+        previous.pack(side=LEFT, padx=3)
         label.pack(side=LEFT, padx=8)
-        last.pack(side=RIGHT); next_button.pack(side=RIGHT, padx=3)
+        last.pack(side=RIGHT)
+        next_button.pack(side=RIGHT, padx=3)
         total_pages = 1
 
         def move(target: int) -> None:
@@ -87,22 +101,35 @@ class CommonWidgetsMixin:
             nonlocal total_pages
             total_pages = result.total_pages
             page_number.set(result.page)
-            label.configure(text=f"Trang {result.page}/{result.total_pages} • {result.total_items:,} kết quả".replace(",", "."))
+            label.configure(
+                text=f"Trang {result.page}/{result.total_pages} • {result.total_items:,} kết quả".replace(
+                    ",", "."
+                )
+            )
             first.configure(state="normal" if result.page > 1 else "disabled")
             previous.configure(state="normal" if result.page > 1 else "disabled")
-            next_button.configure(state="normal" if result.page < result.total_pages else "disabled")
+            next_button.configure(
+                state="normal" if result.page < result.total_pages else "disabled"
+            )
             last.configure(state="normal" if result.page < result.total_pages else "disabled")
 
         return update
 
     def _choose_payment_method(self, title: str, parent=None) -> PaymentMethod | None:
-        raw = simpledialog.askstring(title, "Phương thức: CASH, BANK_TRANSFER hoặc E_WALLET", initialvalue=PaymentMethod.CASH.value, parent=parent or self)
+        raw = simpledialog.askstring(
+            title,
+            "Phương thức: CASH, BANK_TRANSFER hoặc E_WALLET",
+            initialvalue=PaymentMethod.CASH.value,
+            parent=parent or self,
+        )
         if raw is None:
             return None
         try:
             return PaymentMethod(raw.strip().upper())
         except ValueError:
-            messagebox.showerror(title, "Phương thức thanh toán không hợp lệ.", parent=parent or self)
+            messagebox.showerror(
+                title, "Phương thức thanh toán không hợp lệ.", parent=parent or self
+            )
             return None
 
     def _quick_customer(self, combo) -> None:
