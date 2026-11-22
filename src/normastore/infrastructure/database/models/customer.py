@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Integer, String
+from sqlalchemy import Boolean, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from normastore.infrastructure.database.base import Base, Timestamped
@@ -13,6 +13,5 @@ class Customer(Base, Timestamped):
     phone: Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
     email: Mapped[str | None] = mapped_column(String(255))
     address: Mapped[str | None] = mapped_column(String(255))
-    reputation_score: Mapped[int] = mapped_column(Integer, default=80, nullable=False)
     email_opt_in: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     sms_opt_in: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

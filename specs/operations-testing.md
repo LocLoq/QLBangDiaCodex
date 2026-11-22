@@ -9,11 +9,10 @@
 
 ## Kiểm thử đã thực hiện
 
-- Baseline trước refactor: 74 test qua. Sau refactor: 87 test qua, gồm kiểm thử nghiệp vụ MySQL, ranh giới UI/application/database, DTO sau khi đóng session, rollback sau flush và trả một phần, mở/đóng ca, session riêng khi chạy đồng thời, import với client giả, Gemini được inject và lỗi provider embedding.
-- DDL SQLAlchemy của 36 bảng được so sánh trước/sau trên dialect MySQL; mapper được cấu hình đầy đủ và các thao tác cần khóa `FOR UPDATE` vẫn dùng khóa. Chạy `python -m pytest -q` và `python -m compileall -q src tests scripts alembic` để kiểm tra lại.
-- Đã mở 14 trang ở hai cỡ chữ và chế độ tối trên database kiểm thử với worker và provider thật bị vô hiệu. Kiểm tra Treeview gốc báo các cột số/tiền được căn phải thay vì căn giữa theo tiêu chí của script; kết quả mở trang riêng đã qua khi bỏ kiểm tra căn lề đó.
+- Bộ kiểm thử bao gồm nghiệp vụ MySQL, ranh giới UI/application/database, DTO sau khi đóng session, rollback, đặt trước, giá và cọc, báo cáo, migration và sao lưu. Chạy `python -m pytest -q` và `python -m compileall -q src tests scripts alembic` để kiểm tra lại.
+- Đã mở 14 trang ở hai cỡ chữ và chế độ tối trên database kiểm thử. Bộ kiểm tra nhận biết nội dung nằm trong vùng cuộn và kiểm tra cuộn đến cuối; cột số có thể căn phải.
 - Không kiểm chứng SMTP thực, TMDB/Gemini thật hoặc cài đặt trên máy Windows sạch trong đợt này.
 
-## Giới hạn migration đã xác nhận
+## Migration
 
-Upgrade từ database MySQL trống hiện thất bại tại revision `20260907_04`: migration đầu gọi `Base.metadata.create_all` với metadata hiện tại, tạo sẵn `deposit_defaults`; revision sau lại tạo bảng đó và MySQL báo lỗi 1050. Thử nghiệm được thực hiện trên database tạm riêng và database này đã bị xóa. Lịch sử migration và DDL chưa được thay đổi trong refactor; cần xử lý riêng trước khi triển khai khởi tạo mới. Database kiểm thử đã ở revision hiện tại chạy được bộ test.
+Khởi tạo MySQL trống và nâng cấp từ revision `20260907_04` với phim, đĩa, ca và phiếu đã được kiểm tra trên database tạm. Revision `20261121_06` xóa dữ liệu ca và uy tín; revision `20261121_08` xóa cọc cố định cũ. Ứng dụng và lệnh `python -m normastore.migrate` sao lưu trước nâng cấp; chạy Alembic trực tiếp cũng kiểm tra sao lưu trước khi nâng cấp dữ liệu cũ. Nếu sao lưu thất bại, nâng cấp dừng. Các revision xóa dữ liệu không khôi phục dữ liệu bằng downgrade; dùng bản sao lưu để phục hồi.

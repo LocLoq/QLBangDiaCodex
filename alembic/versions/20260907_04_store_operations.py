@@ -19,41 +19,49 @@ depends_on = None
 
 def upgrade() -> None:
     now = datetime.now(timezone.utc)
-    op.create_table(
-        "deposit_defaults",
-        sa.Column("media_format", sa.String(length=20), primary_key=True),
-        sa.Column("amount", sa.Numeric(14, 2), nullable=False),
-        sa.Column("updated_by", sa.Integer(), sa.ForeignKey("employees.id")),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-    )
-    op.bulk_insert(
-        sa.table(
+    inspector = sa.inspect(op.get_bind())
+    if not inspector.has_table("deposit_defaults"):
+        op.create_table(
             "deposit_defaults",
-            sa.column("media_format", sa.String),
-            sa.column("amount", sa.Numeric),
-            sa.column("created_at", sa.DateTime(timezone=True)),
-            sa.column("updated_at", sa.DateTime(timezone=True)),
-        ),
-        [
-            {"media_format": "VHS", "amount": 80000, "created_at": now, "updated_at": now},
-            {"media_format": "VCD", "amount": 100000, "created_at": now, "updated_at": now},
-            {"media_format": "DVD", "amount": 150000, "created_at": now, "updated_at": now},
-            {"media_format": "Blu-ray", "amount": 250000, "created_at": now, "updated_at": now},
-        ],
-    )
-    op.create_table(
-        "mock_daily_runs",
-        sa.Column("id", sa.Integer(), primary_key=True),
-        sa.Column("business_date", sa.Date(), nullable=False, unique=True),
-        sa.Column("seed_version", sa.String(length=40), nullable=False),
-        sa.Column("stats", sa.JSON()),
-        sa.Column("actor_id", sa.Integer(), sa.ForeignKey("employees.id")),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-    )
-    op.create_index("ix_audit_logs_created_at", "audit_logs", ["created_at"])
-    op.create_index("ix_audit_logs_actor_created", "audit_logs", ["actor_id", "created_at"])
-    op.create_index("ix_audit_logs_action_created", "audit_logs", ["action", "created_at"])
+            sa.Column("media_format", sa.String(length=20), primary_key=True),
+            sa.Column("amount", sa.Numeric(14, 2), nullable=False),
+            sa.Column("updated_by", sa.Integer(), sa.ForeignKey("employees.id")),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        )
+        op.bulk_insert(
+            sa.table(
+                "deposit_defaults",
+                sa.column("media_format", sa.String),
+                sa.column("amount", sa.Numeric),
+                sa.column("created_at", sa.DateTime(timezone=True)),
+                sa.column("updated_at", sa.DateTime(timezone=True)),
+            ),
+            [
+                {"media_format": "VHS", "amount": 80000, "created_at": now, "updated_at": now},
+                {"media_format": "VCD", "amount": 100000, "created_at": now, "updated_at": now},
+                {"media_format": "DVD", "amount": 150000, "created_at": now, "updated_at": now},
+                {"media_format": "Blu-ray", "amount": 250000, "created_at": now, "updated_at": now},
+            ],
+        )
+    if not inspector.has_table("mock_daily_runs"):
+        op.create_table(
+            "mock_daily_runs",
+            sa.Column("id", sa.Integer(), primary_key=True),
+            sa.Column("business_date", sa.Date(), nullable=False, unique=True),
+            sa.Column("seed_version", sa.String(length=40), nullable=False),
+            sa.Column("stats", sa.JSON()),
+            sa.Column("actor_id", sa.Integer(), sa.ForeignKey("employees.id")),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        )
+    existing_indexes = {index["name"] for index in inspector.get_indexes("audit_logs")}
+    if "ix_audit_logs_created_at" not in existing_indexes:
+        op.create_index("ix_audit_logs_created_at", "audit_logs", ["created_at"])
+    if "ix_audit_logs_actor_created" not in existing_indexes:
+        op.create_index("ix_audit_logs_actor_created", "audit_logs", ["actor_id", "created_at"])
+    if "ix_audit_logs_action_created" not in existing_indexes:
+        op.create_index("ix_audit_logs_action_created", "audit_logs", ["action", "created_at"])
+
 
 
 def downgrade() -> None:

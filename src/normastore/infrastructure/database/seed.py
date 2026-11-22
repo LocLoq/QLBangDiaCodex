@@ -47,7 +47,6 @@ def seed_basics(session: Session) -> None:
                 full_name="Trần Gia Hân",
                 phone="0900000002",
                 email="han@example.test",
-                reputation_score=92,
             ),
         ]
     )
@@ -57,7 +56,6 @@ def seed_basics(session: Session) -> None:
         overview="Dữ liệu minh họa NormaStore.",
         rental_price=Decimal("25000"),
         sale_price=Decimal("180000"),
-        deposit_amount=Decimal("120000"),
         replacement_value=Decimal("180000"),
     )
     session.add(movie)

@@ -45,9 +45,14 @@ class CatalogItem(Base, Timestamped):
     sale_price: Mapped[Decimal] = mapped_column(
         Numeric(14, 2), default=Decimal("200000"), nullable=False
     )
-    deposit_amount: Mapped[Decimal] = mapped_column(
-        Numeric(14, 2), default=Decimal("150000"), nullable=False
-    )
+    rental_price_mode: Mapped[str] = mapped_column(String(12), default="DIRECT", nullable=False)
+    sale_price_mode: Mapped[str] = mapped_column(String(12), default="DIRECT", nullable=False)
+    rental_price_percent: Mapped[Decimal] = mapped_column(Numeric(7, 2), default=100, nullable=False)
+    sale_price_percent: Mapped[Decimal] = mapped_column(Numeric(7, 2), default=100, nullable=False)
+    discovery_discount_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0, nullable=False)
+    discovery_discount_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    discovery_discount_starts: Mapped[date | None] = mapped_column(Date)
+    discovery_discount_ends: Mapped[date | None] = mapped_column(Date)
     replacement_value: Mapped[Decimal] = mapped_column(
         Numeric(14, 2), default=Decimal("250000"), nullable=False
     )

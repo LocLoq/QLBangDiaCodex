@@ -12,7 +12,7 @@ from normastore.ui.pages.promotions import PromotionsPageMixin
 from normastore.ui.pages.reservations import ReservationsPageMixin
 from normastore.ui.pages.returns import ReturnsPageMixin
 from normastore.ui.pages.settings import SettingsPageMixin
-from normastore.ui.pages.shifts import ShiftsPageMixin
+from normastore.ui.pages.employees import EmployeesPageMixin
 from normastore.ui.pages.statistics import StatisticsPageMixin
 
 __all__ = [
@@ -28,6 +28,6 @@ __all__ = [
     "ReservationsPageMixin",
     "ReturnsPageMixin",
     "SettingsPageMixin",
-    "ShiftsPageMixin",
+    "EmployeesPageMixin",
     "StatisticsPageMixin",
 ]

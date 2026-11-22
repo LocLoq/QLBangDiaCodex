@@ -16,19 +16,22 @@ def round_thousand(value: Decimal) -> Decimal:
     return (value / THOUSAND).quantize(Decimal("1"), rounding=ROUND_UP) * THOUSAND
 
 
-def reputation_factor(score: int) -> tuple[Decimal, int, bool]:
-    if score >= 90:
-        return Decimal("0.85"), 2, False
-    if score >= 70:
-        return Decimal("1"), 0, False
-    if score >= 50:
-        return Decimal("1.25"), -1, False
-    return Decimal("1.5"), -3, True
+def effective_deposit(base: Decimal, premium: bool) -> Decimal:
+    return round_thousand(money(base) * (Decimal("0.70") if premium else Decimal("1")))
 
 
-def effective_deposit(base: Decimal, premium: bool, reputation: int) -> Decimal:
-    factor, _, _ = reputation_factor(reputation)
-    return round_thousand(money(base) * (Decimal("0.70") if premium else Decimal("1")) * factor)
+def effective_price(base: Decimal, item_mode: str, item_percent: Decimal,
+                    copy_mode: str | None, copy_percent: Decimal | None,
+                    condition_percent: Decimal, override: Decimal | None) -> Decimal:
+    mode = copy_mode or ("DIRECT" if override is not None else item_mode)
+    if mode == "DIRECT":
+        return money(override if override is not None and (copy_mode == "DIRECT" or copy_mode is None) else base)
+    if mode == "CONDITION":
+        return money(Decimal(base) * Decimal(condition_percent) / Decimal("100"))
+    if mode == "PERCENT":
+        percent = copy_percent if copy_mode == "PERCENT" else item_percent
+        return money(Decimal(base) * Decimal(percent) / Decimal("100"))
+    raise ValueError("Chế độ giá không hợp lệ.")
 
 
 def late_days(due_date: date, today: date) -> int:

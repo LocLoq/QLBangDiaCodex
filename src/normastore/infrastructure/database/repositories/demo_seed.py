@@ -1,10 +1,14 @@
 from normastore.domain.enums import CopyStatus
-from normastore.infrastructure.database.models import Customer, Employee, Order, PhysicalCopy
+from normastore.infrastructure.database.models import Customer, DepositDefault, Employee, Order, PhysicalCopy
 
 
 class DemoSeedRepository:
     def __init__(self, session):
         self.session = session
+
+    def deposit_percent(self):
+        row = self.session.get(DepositDefault, "PERCENT")
+        return row.amount if row else 75
 
     def sample_customers(self):
         return self.session.query(Customer).filter(Customer.full_name.like("Khách hàng mẫu %"))

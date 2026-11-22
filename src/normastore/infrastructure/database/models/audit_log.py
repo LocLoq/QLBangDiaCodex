@@ -21,4 +21,5 @@ class AuditLog(Base):
         Index("ix_audit_logs_created_at", "created_at"),
         Index("ix_audit_logs_actor_created", "actor_id", "created_at"),
         Index("ix_audit_logs_action_created", "action", "created_at"),
+        Index("ix_audit_entity_history", "action", "entity", "entity_id", "created_at"),
     )

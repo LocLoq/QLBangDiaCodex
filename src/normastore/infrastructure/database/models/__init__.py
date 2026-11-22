@@ -24,14 +24,12 @@ from normastore.infrastructure.database.models.premium_membership import Premium
 from normastore.infrastructure.database.models.recommendation_cache import RecommendationCache
 from normastore.infrastructure.database.models.rental_extension import RentalExtension
 from normastore.infrastructure.database.models.rental_term import RentalTerm
-from normastore.infrastructure.database.models.reputation_event import ReputationEvent
 from normastore.infrastructure.database.models.reservation import Reservation
 from normastore.infrastructure.database.models.return_line import ReturnLine
 from normastore.infrastructure.database.models.return_receipt import ReturnReceipt
 from normastore.infrastructure.database.models.role import Role
 from normastore.infrastructure.database.models.sale_return import SaleReturn
 from normastore.infrastructure.database.models.season import Season
-from normastore.infrastructure.database.models.shift import Shift
 from normastore.infrastructure.database.models.show import Show
 from normastore.infrastructure.database.models.user_account import UserAccount
 from normastore.infrastructure.database.models.voucher import Voucher
@@ -41,10 +39,8 @@ __all__ = [
     "Role",
     "Employee",
     "UserAccount",
-    "Shift",
     "Customer",
     "PremiumMembership",
-    "ReputationEvent",
     "Show",
     "Season",
     "CatalogItem",

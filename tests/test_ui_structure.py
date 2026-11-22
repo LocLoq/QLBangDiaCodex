@@ -17,7 +17,7 @@ from normastore.ui.pages import (
     ReservationsPageMixin,
     ReturnsPageMixin,
     SettingsPageMixin,
-    ShiftsPageMixin,
+    EmployeesPageMixin,
     StatisticsPageMixin,
 )
 
@@ -33,7 +33,7 @@ def test_public_app_entrypoint_has_all_page_builders():
         "inventory_page",
         "customers_page",
         "promotions_page",
-        "shifts_page",
+        "employees_page",
         "notifications_page",
         "statistics_page",
         "audit_page",
@@ -58,7 +58,7 @@ def test_page_mixins_are_statically_importable():
             ReservationsPageMixin,
             ReturnsPageMixin,
             SettingsPageMixin,
-            ShiftsPageMixin,
+            EmployeesPageMixin,
             StatisticsPageMixin,
         )
     )

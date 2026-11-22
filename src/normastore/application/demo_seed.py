@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from normastore.domain.enums import CopyStatus, LineAction, PaymentMethod, RentalState
+from normastore.domain.policies import effective_deposit, effective_price
 from normastore.infrastructure.database.models import (
     Customer,
     Employee,
@@ -102,7 +103,6 @@ def seed_demo(uow_factory, target_orders: int):
                 Customer(
                     full_name=vietnamese_name(index),
                     phone=f"098{index:07d}",
-                    reputation_score=rng.randint(45, 98),
                 )
             )
         if repo.employee_count() < 12:
@@ -114,6 +114,7 @@ def seed_demo(uow_factory, target_orders: int):
     with uow_factory() as uow:
         repo = DemoSeedRepository(uow.session)
         customers = list(repo.customers())
+        deposit_percent = Decimal(repo.deposit_percent())
         employees = list(repo.employees())
         copies = [
             copy
@@ -136,32 +137,33 @@ def seed_demo(uow_factory, target_orders: int):
                 if sellable and (not rentable or rng.random() < 0.20)
                 else LineAction.RENT
             )
+            item = copy.item
+            rental_price = effective_price(item.rental_price, item.rental_price_mode, item.rental_price_percent, copy.rental_price_mode, copy.rental_price_percent, copy.condition_percent, copy.rental_price_override)
+            sale_price = effective_price(item.sale_price, item.sale_price_mode, item.sale_price_percent, copy.sale_price_mode, copy.sale_price_percent, copy.condition_percent, copy.sale_price_override)
+            deposit = effective_deposit(sale_price * deposit_percent / Decimal("100"), False) if action == LineAction.RENT else Decimal("0")
             order = Order(
                 code=f"MOCK{index:08d}",
                 customer_id=customer.id,
                 employee_id=employee.id,
                 status="CONFIRMED",
-                gross_total=copy.item.sale_price
+                gross_total=sale_price
                 if action == LineAction.BUY
-                else copy.item.rental_price,
+                else rental_price,
                 discount_total=Decimal("0"),
-                deposit_total=copy.item.deposit_amount
-                if action == LineAction.RENT
-                else Decimal("0"),
+                deposit_total=deposit,
                 created_at=created,
                 updated_at=created,
             )
             repo.add_order(order)
-            price = copy.item.sale_price if action == LineAction.BUY else copy.item.rental_price
+            price = sale_price if action == LineAction.BUY else rental_price
             line = OrderLine(
                 order_id=order.id,
                 copy_id=copy.id,
                 action=action,
                 title_snapshot=copy.item.title,
+                barcode_snapshot=copy.barcode,
                 unit_price=price,
-                deposit_amount=copy.item.deposit_amount
-                if action == LineAction.RENT
-                else Decimal("0"),
+                deposit_amount=deposit,
             )
             repo.add_order_line(line)
             if action == LineAction.RENT:

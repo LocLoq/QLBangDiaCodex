@@ -12,9 +12,8 @@ Tiến độ và các điều kiện còn thiếu được ghi ở [IMPLEMENTATI
 - Catalog Movie, Show, Season và Episode; chuyển Card/Danh sách (poster cache tải nền), xem chi tiết từng bộ và lọc Episode theo mùa, thêm Episode hàng loạt, tồn kho theo barcode, bulk archive và bulk sửa giá. Các thay đổi danh mục/kho chỉ dành cho Quản lý hoặc Quản trị viên và có audit.
 - Phiếu trộn thuê/mua, hạn trả theo dòng, cọc, Premium, voucher, combo cố định hoặc N Episode cùng Show; thanh toán tiền mặt/chuyển khoản/ví điện tử.
 - Trả từng phần, phạt, gia hạn, chuyển thuê thành mua, trả hàng bán, kiểm tra copy sau hoàn bán.
-- Khách hàng, điểm uy tín có audit, Premium, đặt trước FIFO/giữ 24 giờ và đề cử phim.
+- Khách hàng, Premium, đặt trước FIFO/giữ 24 giờ và đề cử phim.
 - Phiếu đã lập, thông báo Email/SMS mock, thống kê theo ngày/tháng/quý/năm hoặc khoảng tùy chọn, doanh thu Premium, top thuê/bán/combo, drill-down biểu đồ tồn kho, xuất CSV/PNG.
-- Mở/đóng ca; chỉ chủ ca hoặc Quản lý/Quản trị viên được đóng ca.
 
 ## Khởi động
 Yêu cầu MySQL trong Laragon (cài đặt laragon) đang chạy trên `127.0.0.1:3306`, user `root` không mật khẩu.
@@ -26,11 +25,13 @@ Copy-Item .env.example .env.local
 & $py -m normastore
 ```
 
-Lần đầu app tự tạo `normastore_db`, chạy Alembic đến revision mới nhất, rồi thêm dữ liệu tối thiểu. Đăng nhập mặc định: `admin` / `admin123`; đổi mật khẩu ngay sau khi đăng nhập. Khi chỉ muốn chạy migration mà không mở giao diện, dùng `& $py -m alembic upgrade head` sau khi database đã được tạo.
+Lần đầu app tự tạo `normastore_db`, chạy Alembic đến revision mới nhất, rồi thêm dữ liệu tối thiểu. Đăng nhập mặc định: `admin` / `admin123`; đổi mật khẩu ngay sau khi đăng nhập. Khi chỉ muốn nâng cấp database mà không mở giao diện, dùng `& $py -m normastore.migrate`; lệnh này đọc cùng cấu hình và thực hiện cùng bước sao lưu như lúc mở ứng dụng.
 
 ## Backup trước migration/import
 
 Tạo backup MySQL nhất quán trước khi import TMDB lớn hoặc nâng cấp phiên bản. File `.sql` được ghi trong `backups/` và đã bị Git bỏ qua.
+
+Trước revision xóa ca, uy tín và cấu hình cọc cố định cũ, ứng dụng tự sao lưu database vào thư mục dữ liệu người dùng `NormaStore/backups`. Cần có `mysqldump`; nếu sao lưu thất bại, ứng dụng dừng nâng cấp để giữ dữ liệu cũ.
 
 ```powershell
 & $py scripts/backup_database.py
@@ -70,6 +71,8 @@ The command stores 768-dimension vectors by default and is repeatable: unchanged
 & $py -m pytest -q
 & $py -m compileall -q src tests scripts alembic
 ```
+
+Kiểm thử tạo và thay đổi các database thử nghiệm trên MySQL cục bộ; mặc định dùng cổng 3306. Để chạy trên một instance MySQL thử nghiệm riêng, đặt `NORMASTORE_TEST_MYSQL_PORT` thành cổng của instance đó trước khi chạy pytest. Không trỏ biến này tới server có database thử nghiệm cần giữ lại.
 
 ## Đóng gói Windows
 

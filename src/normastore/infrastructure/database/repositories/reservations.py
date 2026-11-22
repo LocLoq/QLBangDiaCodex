@@ -78,12 +78,27 @@ class ReservationQueries:
             )
         )
 
-    def fetch_expire_reservation_holds_reservations(self, now):
-        return self.session.scalars(
-            select(Reservation)
-            .where(Reservation.state == ReservationState.HELD, Reservation.hold_until <= now)
-            .with_for_update()
+    def expired_hold_copy_ids(self, now, item_id=None):
+        statement = select(Reservation.allocated_copy_id).where(
+            Reservation.state == ReservationState.HELD, Reservation.hold_until <= now,
+            Reservation.allocated_copy_id.is_not(None),
         )
+        if item_id is not None:
+            statement = statement.where(Reservation.item_id == item_id)
+        return self.session.scalars(statement.distinct().order_by(Reservation.allocated_copy_id)).all()
+
+    def lock_copies(self, copy_ids):
+        if copy_ids:
+            self.session.execute(select(PhysicalCopy.id).where(PhysicalCopy.id.in_(copy_ids))
+                                 .order_by(PhysicalCopy.id).with_for_update()).all()
+
+    def fetch_expire_reservation_holds_reservations(self, now, item_id=None):
+        statement = select(Reservation).where(
+            Reservation.state == ReservationState.HELD, Reservation.hold_until <= now
+        )
+        if item_id is not None:
+            statement = statement.where(Reservation.item_id == item_id)
+        return self.session.scalars(statement.order_by(Reservation.id).with_for_update())
 
     def fetch_expire_reservation_holds_copy(self, reservation):
         return self.session.scalar(
@@ -95,7 +110,10 @@ class ReservationQueries:
     def fetch_allocate_waiting_reservations_copies(self, item_id):
         return self.session.scalars(
             select(PhysicalCopy)
-            .where(PhysicalCopy.item_id == item_id, PhysicalCopy.status == CopyStatus.AVAILABLE)
+            .join(CatalogItem, CatalogItem.id == PhysicalCopy.item_id)
+            .where(PhysicalCopy.item_id == item_id, PhysicalCopy.status == CopyStatus.AVAILABLE,
+                   ((PhysicalCopy.can_rent.is_(True) & CatalogItem.can_rent.is_(True)) |
+                    (PhysicalCopy.can_sell.is_(True) & CatalogItem.can_sell.is_(True))))
             .order_by(PhysicalCopy.id)
             .with_for_update()
         )
@@ -104,9 +122,50 @@ class ReservationQueries:
         return self.session.scalars(
             select(Reservation)
             .where(Reservation.item_id == item_id, Reservation.state == ReservationState.WAITING)
-            .order_by(Reservation.created_at)
+            .order_by(Reservation.created_at, Reservation.id)
             .with_for_update()
         )
+
+    def has_waiting(self, item_id):
+        return self.session.scalar(select(Reservation.id).where(
+            Reservation.item_id == item_id, Reservation.state == ReservationState.WAITING
+        ).limit(1)) is not None
+
+    def released_waiting_for_copies(self, copy_ids, today):
+        return self.session.scalars(
+            select(Reservation.item_id)
+            .join(PhysicalCopy, PhysicalCopy.item_id == Reservation.item_id)
+            .join(CatalogItem, CatalogItem.id == Reservation.item_id)
+            .where(PhysicalCopy.id.in_(copy_ids), Reservation.state == ReservationState.WAITING,
+                   CatalogItem.archived.is_(False),
+                   CatalogItem.release_date.is_(None) | (CatalogItem.release_date <= today))
+            .distinct().order_by(Reservation.item_id)
+        ).all()
+
+    def expired_items_for_copies(self, copy_ids, now):
+        return self.session.scalars(select(Reservation.item_id).where(
+            Reservation.allocated_copy_id.in_(copy_ids), Reservation.state == ReservationState.HELD,
+            Reservation.hold_until <= now,
+        ).distinct().order_by(Reservation.item_id)).all()
+
+    def released_waiting_item_ids(self, today):
+        return self.session.scalars(
+            select(Reservation.item_id).join(CatalogItem, CatalogItem.id == Reservation.item_id)
+            .where(Reservation.state == ReservationState.WAITING,
+                   (CatalogItem.release_date.is_(None) | (CatalogItem.release_date <= today)))
+            .distinct()
+        ).all()
+
+    def held_for_customer(self, copy_id, customer_id, now, lock=False):
+        statement = select(Reservation).where(
+            Reservation.allocated_copy_id == copy_id,
+            Reservation.customer_id == customer_id,
+            Reservation.state == ReservationState.HELD,
+            Reservation.hold_until > now,
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return self.session.scalar(statement)
 
     def add_reservation(self, value):
         self.session.add(value)

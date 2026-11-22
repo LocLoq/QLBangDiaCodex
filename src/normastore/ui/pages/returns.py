@@ -12,9 +12,8 @@ from normastore.application.contracts import PageRequest, PaymentInput, SortSpec
 from normastore.domain.enums import (
     CopyCondition,
     PaymentMethod,
-    ReturnOutcome,
 )
-from normastore.ui.formatting import vnd
+from normastore.ui.formatting import RETURN_LABELS, vnd
 
 
 class ReturnsPageMixin:
@@ -28,13 +27,13 @@ class ReturnsPageMixin:
         tree.heading("due", text="Hạn trả")
         tree.heading("status", text="Trạng thái")
         tree.pack(fill=BOTH, expand=True)
-        outcome = tk.StringVar(value="NORMAL")
+        outcome = tk.StringVar(value="Bình thường")
         footer = ttk.Frame(page)
         footer.pack(fill=X, pady=7)
         ttk.Combobox(
             footer,
             textvariable=outcome,
-            values=[x.value for x in ReturnOutcome],
+            values=tuple(RETURN_LABELS),
             width=18,
             state="readonly",
         ).pack(side=LEFT)
@@ -86,7 +85,7 @@ class ReturnsPageMixin:
                 )
                 if method is None:
                     return
-                balance = self.store.return_rentals(self.account.employee_id, selected[0].customer_id, [(rental.term_id, ReturnOutcome(outcome.get()), note.get()) for rental in selected], PaymentInput(method, Decimal(paid)))
+                balance = self.store.return_rentals(self.account.employee_id, selected[0].customer_id, [(rental.term_id, RETURN_LABELS[outcome.get()], note.get()) for rental in selected], PaymentInput(method, Decimal(paid)))
                 messagebox.showinfo(
                     "Trả đĩa", f"Số dư sau khi cấn cọc: {vnd(balance)}", parent=self
                 )
@@ -128,8 +127,13 @@ class ReturnsPageMixin:
                 return
             try:
                 order = self.store.rental_to_sale(rental.term_id, self.account.employee_id, PaymentInput(method, Decimal(amount)))
+                receipt = self.store.order_receipt(order.id)
+                excess = -sum((payment.amount for payment in receipt.payments if payment.category == "DEPOSIT_REFUND"), Decimal("0"))
+                details = f"Đã tạo phiếu bán {order.code}.\nCọc đã cấn: {vnd(receipt.applied_deposit)}.\nCòn thiếu: {vnd(receipt.balance_due)}."
+                if excess:
+                    details += f"\nCần hoàn phần cọc vượt giá bán: {vnd(excess)}."
                 messagebox.showinfo(
-                    "Chuyển thành mua", f"Đã tạo phiếu bán {order.code} và cấn cọc.", parent=self
+                    "Chuyển thành mua", details, parent=self
                 )
                 refresh()
             except Exception as exc:
@@ -148,7 +152,7 @@ class ReturnsPageMixin:
             for key, title in [
                 ("customer", "Khách hàng"),
                 ("title", "Phim/tập"),
-                ("barcode", "Barcode"),
+                ("barcode", "Mã vạch"),
                 ("sold", "Ngày bán"),
                 ("expires", "Hạn trả"),
             ]:

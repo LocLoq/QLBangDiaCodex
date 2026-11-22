@@ -1,8 +1,8 @@
 # Cơ sở dữ liệu và model
 
-Metadata SQLAlchemy đăng ký 36 bảng; mỗi class nằm trong một module riêng dưới `src/normastore/infrastructure/database/models`. Các bảng, cột, kiểu, giá trị mặc định, khóa và index bên dưới được trích từ metadata của code. `PK` là khóa chính, `FK` là khóa ngoại, `UQ` là duy nhất; `NULL` cho phép rỗng. Default Python là giá trị hoặc hàm phía ứng dụng, không nhất thiết là default phía MySQL.
+Metadata SQLAlchemy đăng ký 34 bảng; mỗi class nằm trong một module riêng dưới `src/normastore/infrastructure/database/models`. `PK` là khóa chính, `FK` là khóa ngoại, `UQ` là duy nhất; `NULL` cho phép rỗng. Default Python không nhất thiết là default phía MySQL.
 
-Alembic sử dụng cùng metadata, với các revision từ `20260903_01` đến `20260907_04`. Hạn chế khi nâng cấp một database trống được ghi trong [vận hành và kiểm thử](operations-testing.md#giới-hạn-migration-đã-xác-nhận).
+Alembic dùng schema khởi tạo cố định và các revision đến `20261122_11`; xem [vận hành và kiểm thử](operations-testing.md#migration) để biết cách sao lưu trước nâng cấp. Tình trạng lúc hoàn hàng bán được lưu tại thời điểm hoàn; dữ liệu cũ chỉ được khôi phục khi nhật ký có ghi tình trạng. Mã vạch trên dòng phiếu được lưu tại thời điểm giao dịch; migration dùng nhật ký sửa kho sau thời điểm lập phiếu nếu có, nếu không dùng mã vạch còn trong kho. Các thay đổi cũ không có nhật ký hoặc xảy ra cùng giây với giao dịch không thể khôi phục chắc chắn. Phiếu chuyển thuê thành mua mới lưu cọc đã cấn trong `orders.deposit_applied`; phiếu cũ giữ nguyên số liệu và được diễn giải theo dòng thuê gốc.
 
 ## Quan hệ
 
@@ -87,9 +87,6 @@ erDiagram
     rental_terms {
         int id PK
     }
-    reputation_events {
-        int id PK
-    }
     reservations {
         int id PK
     }
@@ -106,9 +103,6 @@ erDiagram
         int id PK
     }
     seasons {
-        int id PK
-    }
-    shifts {
         int id PK
     }
     shows {
@@ -143,7 +137,6 @@ erDiagram
     order_lines o|--o{ order_lines : source_rental_line_id
     customers ||--o{ orders : customer_id
     employees ||--o{ orders : employee_id
-    shifts o|--o{ orders : shift_id
     customers ||--o{ payment_transactions : customer_id
     employees o|--o{ payment_transactions : employee_id
     orders o|--o{ payment_transactions : order_id
@@ -154,8 +147,6 @@ erDiagram
     employees ||--o{ rental_extensions : employee_id
     rental_terms ||--o{ rental_extensions : rental_term_id
     order_lines ||--o| rental_terms : line_id
-    employees o|--o{ reputation_events : actor_id
-    customers ||--o{ reputation_events : customer_id
     physical_copies o|--o{ reservations : allocated_copy_id
     customers ||--o{ reservations : customer_id
     catalog_items ||--o{ reservations : item_id
@@ -166,7 +157,6 @@ erDiagram
     employees ||--o{ sale_returns : employee_id
     order_lines ||--o{ sale_returns : sale_line_id
     shows ||--o{ seasons : show_id
-    employees ||--o{ shifts : employee_id
     employees ||--o| user_accounts : employee_id
     roles ||--o{ user_accounts : role_id
 ```
@@ -207,7 +197,11 @@ Mô-đun: `normastore.infrastructure.database.models.catalog_item`
 | `poster_path` | `VARCHAR(500)` | NULL |
 | `rental_price` | `NUMERIC(14, 2)` | NOT NULL; Python default: 25000 |
 | `sale_price` | `NUMERIC(14, 2)` | NOT NULL; Python default: 200000 |
-| `deposit_amount` | `NUMERIC(14, 2)` | NOT NULL; Python default: 150000 |
+| `rental_price_mode`, `sale_price_mode` | `VARCHAR(12)` | NOT NULL; mặc định DIRECT |
+| `rental_price_percent`, `sale_price_percent` | `NUMERIC(7, 2)` | NOT NULL; mặc định 100 |
+| `discovery_discount_percent` | `NUMERIC(5, 2)` | NOT NULL; mặc định 0 |
+| `discovery_discount_active` | `BOOL` | NOT NULL; mặc định False |
+| `discovery_discount_starts`, `discovery_discount_ends` | `DATE` | NULL |
 | `replacement_value` | `NUMERIC(14, 2)` | NOT NULL; Python default: 250000 |
 | `can_rent` | `BOOL` | NOT NULL; Python default: True |
 | `can_sell` | `BOOL` | NOT NULL; Python default: True |
@@ -293,7 +287,6 @@ Mô-đun: `normastore.infrastructure.database.models.customer`
 | `phone` | `VARCHAR(30)` | NOT NULL; UQ |
 | `email` | `VARCHAR(255)` | NULL |
 | `address` | `VARCHAR(255)` | NULL |
-| `reputation_score` | `INTEGER` | NOT NULL; Python default: 80 |
 | `email_opt_in` | `BOOL` | NOT NULL; Python default: True |
 | `sms_opt_in` | `BOOL` | NOT NULL; Python default: True |
 | `created_at` | `DATETIME` | NOT NULL; Python default: utcnow() |
@@ -467,7 +460,6 @@ Mô-đun: `normastore.infrastructure.database.models.order`
 | `code` | `VARCHAR(30)` | NOT NULL; UQ |
 | `customer_id` | `INTEGER` | NOT NULL; FK -> customers.id |
 | `employee_id` | `INTEGER` | NOT NULL; FK -> employees.id |
-| `shift_id` | `INTEGER` | NULL; FK -> shifts.id |
 | `status` | `VARCHAR(30)` | NOT NULL; Python default: CONFIRMED |
 | `gross_total` | `NUMERIC(14, 2)` | NOT NULL; Python default: 0 |
 | `discount_total` | `NUMERIC(14, 2)` | NOT NULL; Python default: 0 |
@@ -528,7 +520,9 @@ Mô-đun: `normastore.infrastructure.database.models.physical_copy`
 | `can_sell` | `BOOL` | NOT NULL; Python default: True |
 | `rental_price_override` | `NUMERIC(14, 2)` | NULL |
 | `sale_price_override` | `NUMERIC(14, 2)` | NULL |
-| `deposit_override` | `NUMERIC(14, 2)` | NULL |
+| `condition_percent` | `NUMERIC(5, 2)` | NOT NULL; mặc định 90 |
+| `rental_price_mode`, `sale_price_mode` | `VARCHAR(12)` | NULL; kế thừa phim nếu rỗng |
+| `rental_price_percent`, `sale_price_percent` | `NUMERIC(7, 2)` | NULL |
 | `created_at` | `DATETIME` | NOT NULL; Python default: utcnow() |
 | `updated_at` | `DATETIME` | NOT NULL; Python default: utcnow(); Python on update: utcnow() |
 
@@ -598,22 +592,6 @@ Mô-đun: `normastore.infrastructure.database.models.rental_term`
 | `returned_on` | `DATE` | NULL |
 
 Ràng buộc / chỉ mục: `UNIQUE (unnamed) (line_id)`; `INDEX ix_rental_due_state (due_date, state)`.
-
-### `reputation_events` ? `ReputationEvent`
-
-Mô-đun: `normastore.infrastructure.database.models.reputation_event`
-
-| Cột | Kiểu MySQL | Ràng buộc / giá trị mặc định |
-|---|---|---|
-| `id` | `INTEGER` | NOT NULL; PK |
-| `customer_id` | `INTEGER` | NOT NULL; FK -> customers.id |
-| `delta` | `INTEGER` | NOT NULL |
-| `reason` | `VARCHAR(255)` | NOT NULL |
-| `actor_id` | `INTEGER` | NULL; FK -> employees.id |
-| `created_at` | `DATETIME` | NOT NULL; Python default: utcnow() |
-| `updated_at` | `DATETIME` | NOT NULL; Python default: utcnow(); Python on update: utcnow() |
-
-Ràng buộc / chỉ mục: ?.
 
 ### `reservations` ? `Reservation`
 
@@ -702,23 +680,6 @@ Mô-đun: `normastore.infrastructure.database.models.season`
 | `name` | `VARCHAR(255)` | NOT NULL |
 
 Ràng buộc / chỉ mục: `UNIQUE uq_season_show_number (show_id, season_number)`.
-
-### `shifts` ? `Shift`
-
-Mô-đun: `normastore.infrastructure.database.models.shift`
-
-| Cột | Kiểu MySQL | Ràng buộc / giá trị mặc định |
-|---|---|---|
-| `id` | `INTEGER` | NOT NULL; PK |
-| `employee_id` | `INTEGER` | NOT NULL; FK -> employees.id |
-| `opened_at` | `DATETIME` | NOT NULL; Python default: utcnow() |
-| `closed_at` | `DATETIME` | NULL |
-| `opening_cash` | `NUMERIC(14, 2)` | NOT NULL; Python default: 0 |
-| `closing_cash` | `NUMERIC(14, 2)` | NULL |
-| `created_at` | `DATETIME` | NOT NULL; Python default: utcnow() |
-| `updated_at` | `DATETIME` | NOT NULL; Python default: utcnow(); Python on update: utcnow() |
-
-Ràng buộc / chỉ mục: ?.
 
 ### `shows` ? `Show`
 

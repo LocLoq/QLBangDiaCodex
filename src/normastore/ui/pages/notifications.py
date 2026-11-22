@@ -4,13 +4,30 @@ from tkinter import ttk
 
 from ttkbootstrap.constants import BOTH, END, LEFT
 
+from normastore.domain.enums import NotificationStatus
+from normastore.ui.formatting import format_datetime
+
+
+STATUS_LABELS = {
+    NotificationStatus.PENDING: "Chờ gửi",
+    NotificationStatus.SENT: "Đã gửi",
+    NotificationStatus.FAILED: "Gửi thất bại",
+    NotificationStatus.SKIPPED: "Đã bỏ qua",
+}
+EVENT_LABELS = {
+    "BEFORE_DUE": "Sắp đến hạn trả",
+    "DUE_TODAY": "Đến hạn trả hôm nay",
+    "OVERDUE_1": "Quá hạn 1 ngày",
+    "OVERDUE_3": "Quá hạn 3 ngày",
+    "OVERDUE_7": "Quá hạn 7 ngày",
+}
 
 class NotificationsPageMixin:
     def notifications_page(self, page) -> None:
-        self._heading(page, "Thông báo", "Email SMTP thật • SMS mock • Gửi bù khi mở app")
+        self._heading(page, "Thông báo", "Nhắc hạn trả và gửi bù khi mở ứng dụng")
         ttk.Label(
             page,
-            text="Worker kiểm tra mỗi 5 phút khi ứng dụng mở. SMS là mock; Email chỉ gửi khi SMTP và Windows Credential Manager được cấu hình.",
+            text="Kiểm tra mỗi 5 phút khi ứng dụng mở. Tin nhắn SMS được mô phỏng; email cần cấu hình máy chủ gửi và thông tin đăng nhập Windows.",
             wraplength=850,
             justify=LEFT,
         ).pack(anchor="w", pady=(0, 10))
@@ -42,9 +59,9 @@ class NotificationsPageMixin:
                     values=(
                         notification.customer_name,
                         notification.channel,
-                        notification.event,
-                        notification.scheduled_for.strftime("%d/%m/%Y %H:%M"),
-                        notification.status,
+                        EVENT_LABELS.get(notification.event, notification.event),
+                        format_datetime(notification.scheduled_for),
+                        STATUS_LABELS.get(notification.status, notification.status),
                         notification.attempts,
                         notification.error or "—",
                     ),

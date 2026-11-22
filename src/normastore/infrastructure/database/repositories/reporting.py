@@ -1,10 +1,15 @@
-from sqlalchemy import func, select
+from datetime import timedelta
 
+from sqlalchemy import DateTime, case, func, select
+
+from normastore.domain.business_time import utc_start_of_day
 from normastore.domain.enums import CopyStatus, LineAction, RentalState, ReservationState
 from normastore.infrastructure.database.models import (
     CatalogItem,
     Combo,
     Customer,
+    Genre,
+    ItemGenre,
     NotificationOutbox,
     Order,
     OrderDiscount,
@@ -16,6 +21,8 @@ from normastore.infrastructure.database.models import (
     RentalExtension,
     RentalTerm,
     Reservation,
+    ReturnLine,
+    ReturnReceipt,
     SaleReturn,
 )
 
@@ -29,20 +36,91 @@ class ReportingRepository:
     def for_period(self, start_on, end_on):
         return ReportingRepository(self.session, start_on, end_on)
 
+    def _genre_filter(self, genre_id):
+        if genre_id is None:
+            return []
+        return [select(ItemGenre.item_id).where(
+            ItemGenre.item_id == PhysicalCopy.item_id, ItemGenre.genre_id == genre_id
+        ).exists()]
+
+    def revenue_series(self, action=None, genre_id=None):
+        day = func.date(func.convert_tz(Order.created_at, "+00:00", "+07:00"))
+        statement = (select(day, OrderLine.action,
+                            func.sum(self._net_line_revenue()))
+                     .select_from(OrderLine).join(Order, Order.id == OrderLine.order_id)
+                     .join(PhysicalCopy, PhysicalCopy.id == OrderLine.copy_id)
+                     .where(OrderLine.action.in_((LineAction.RENT, LineAction.BUY)),
+                            *self._period(Order.created_at), *self._genre_filter(genre_id)))
+        if action:
+            statement = statement.where(OrderLine.action == action)
+        return self.session.execute(statement.group_by(day, OrderLine.action).order_by(day)).all()
+
+    def damage_counts(self, action=None, genre_id=None):
+        result = []
+        if action != LineAction.BUY:
+            result.extend(self.session.execute(
+                select(ReturnLine.outcome, func.count(ReturnLine.id)).select_from(ReturnLine)
+                .join(ReturnReceipt, ReturnReceipt.id == ReturnLine.receipt_id)
+                .join(RentalTerm, RentalTerm.id == ReturnLine.rental_term_id)
+                .join(OrderLine, OrderLine.id == RentalTerm.line_id)
+                .join(PhysicalCopy, PhysicalCopy.id == OrderLine.copy_id)
+                .where(ReturnLine.outcome.in_(("LIGHT_DAMAGE", "HEAVY_DAMAGE", "LOST")),
+                       *self._period(ReturnReceipt.returned_on), *self._genre_filter(genre_id))
+                .group_by(ReturnLine.outcome)
+            ).all())
+        if action != LineAction.RENT:
+            rows = self.session.execute(
+                select(SaleReturn.condition_at_return, func.count(SaleReturn.id)).select_from(SaleReturn)
+                .join(OrderLine, OrderLine.id == SaleReturn.sale_line_id)
+                .join(PhysicalCopy, PhysicalCopy.id == OrderLine.copy_id)
+                .where(SaleReturn.condition_at_return.in_(("WORN", "DAMAGED")),
+                       *self._period(SaleReturn.returned_on), *self._genre_filter(genre_id))
+                .group_by(SaleReturn.condition_at_return)
+            ).all()
+            result.extend((f"SALE_{condition}", count) for condition, count in rows)
+        return result
+
+    def genre_sales(self, action=None, genre_id=None):
+        if action == LineAction.RENT:
+            return []
+        statement = (select(Genre.name, func.count(func.distinct(OrderLine.id)))
+                     .select_from(OrderLine).join(Order, Order.id == OrderLine.order_id)
+                     .join(PhysicalCopy, PhysicalCopy.id == OrderLine.copy_id)
+                     .join(ItemGenre, ItemGenre.item_id == PhysicalCopy.item_id)
+                     .join(Genre, Genre.id == ItemGenre.genre_id)
+                     .where(OrderLine.action == LineAction.BUY, *self._period(Order.created_at)))
+        if genre_id is not None:
+            statement = statement.where(Genre.id == genre_id)
+        return self.session.execute(statement.group_by(Genre.id, Genre.name)
+                                    .order_by(func.count(func.distinct(OrderLine.id)).desc(), Genre.name)
+                                    .limit(10)).all()
+
     def _period(self, column):
         conditions = []
+        is_timestamp = isinstance(column.type, DateTime)
         if self.start_on:
-            conditions.append(func.date(column) >= self.start_on)
+            conditions.append(column >= (utc_start_of_day(self.start_on) if is_timestamp else self.start_on))
         if self.end_on:
-            conditions.append(func.date(column) <= self.end_on)
+            if is_timestamp:
+                conditions.append(column < utc_start_of_day(self.end_on + timedelta(days=1)))
+            else:
+                conditions.append(column <= self.end_on)
         return conditions
 
     def line_revenue(self, action):
         return self.session.scalar(
-            select(func.coalesce(func.sum(OrderLine.unit_price - OrderLine.discount_amount), 0))
+            select(func.coalesce(func.sum(self._net_line_revenue()), 0))
             .join(Order, OrderLine.order_id == Order.id)
             .where(OrderLine.action == action, *self._period(Order.created_at))
         )
+
+    @staticmethod
+    def _net_line_revenue():
+        legacy_deposit = case(
+            ((Order.deposit_applied.is_(None) & OrderLine.source_rental_line_id.is_not(None)), OrderLine.discount_amount),
+            else_=0,
+        )
+        return OrderLine.unit_price - OrderLine.discount_amount + legacy_deposit
 
     def extension_revenue(self):
         return self.session.scalar(
@@ -73,10 +151,13 @@ class ReportingRepository:
         )
 
     def order_totals(self):
+        legacy_deposit = (select(func.coalesce(func.sum(OrderLine.discount_amount), 0))
+                          .where(OrderLine.order_id == Order.id, OrderLine.source_rental_line_id.is_not(None))
+                          .correlate(Order).scalar_subquery())
         return self.session.execute(
             select(
                 func.coalesce(func.sum(Order.gross_total), 0),
-                func.coalesce(func.sum(Order.discount_total), 0),
+                func.coalesce(func.sum(Order.discount_total - case((Order.deposit_applied.is_(None), legacy_deposit), else_=0)), 0),
             ).where(*self._period(Order.created_at))
         ).one()
 

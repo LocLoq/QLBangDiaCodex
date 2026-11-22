@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from collections import OrderedDict
+from copy import deepcopy
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from threading import RLock
+from time import monotonic
 from typing import Callable
 
 from normastore.application._operations import _StoreOperations
@@ -39,7 +43,6 @@ from normastore.application.contracts import (
     RecordView,
     ReservationView,
     ReturnableSale,
-    ShiftView,
     ShowEpisodeSummary,
     ShowSummary,
     SortSpec,
@@ -62,7 +65,6 @@ from normastore.infrastructure.database.models import (
     Customer,
     Genre,
     Order,
-    Shift,
     UserAccount,
 )
 from normastore.infrastructure.database.repositories.notifications import NotificationQueries
@@ -81,15 +83,6 @@ def _snapshot(value):
             value.role.name,
             value.must_change_password,
         )
-    if isinstance(value, Shift):
-        return ShiftView(
-            value.id,
-            value.employee_id,
-            value.opened_at,
-            value.closed_at,
-            value.opening_cash,
-            value.closing_cash,
-        )
     if isinstance(value, Customer):
         return CustomerView(
             value.id,
@@ -97,7 +90,6 @@ def _snapshot(value):
             value.phone,
             value.email,
             value.address,
-            value.reputation_score,
             value.email_opt_in,
             value.sms_opt_in,
         )
@@ -112,9 +104,14 @@ def _snapshot(value):
             value.vote_average,
             value.rental_price,
             value.sale_price,
-            value.deposit_amount,
             value.can_rent,
             value.can_sell,
+            value.release_date,
+            value.rental_price_mode,
+            value.sale_price_mode,
+            value.rental_price_percent,
+            value.sale_price_percent,
+            value.show_id,
         )
     if isinstance(value, Order):
         return OrderView(
@@ -142,19 +139,82 @@ class StoreService:
     def __init__(self, uow_factory, integrations):
         self._uow_factory = uow_factory
         self._integrations = integrations
+        self._cache = OrderedDict()
+        self._cache_lock = RLock()
+        self._cache_revision = 0
+
+    _REFERENCE_READS = frozenset({"list_genres", "list_shows"})
+    _CACHED_READS = frozenset({
+        "query_catalog", "query_checkout_catalog", "catalog_item", "catalog_metadata", "list_show_episodes",
+        "query_customers", "query_customers_with_premium", "list_customers", "premium_active", "premium_until", "list_vouchers", "list_combos",
+        "query_inventory", "inventory_groups", "inventory_group_episodes", "dashboard",
+        "dashboard_low_stock", "query_dashboard_low_stock", "dashboard_popular", "dashboard_upcoming", "query_dashboard_upcoming", "dashboard_discovery",
+        "query_orders", "query_active_rentals", "operational_report", "chart_report",
+    })
+    _MUTATIONS = frozenset({
+        "change_password", "create_employee_account", "add_customer", "activate_premium",
+        "create_voucher", "create_fixed_combo", "create_show_episode_combo", "save_catalog_item",
+        "create_show", "add_episodes_bulk", "add_copy", "save_deposit_percent",
+        "update_inventory_copy",
+        "archive_items", "bulk_update_catalog_prices", "checkout", "return_rentals",
+        "extend_rental", "rental_to_sale", "return_sale", "inspect_copy", "reserve",
+        "expire_reservation_holds", "allocate_waiting_reservations", "allocate_released_reservations", "allocate_for_checkout",
+        "set_discovery_discount", "ensure_mock_fixtures", "seed_mock_day", "seed_mock_range",
+    })
+
+    @property
+    def cache_revision(self) -> int:
+        with self._cache_lock:
+            return self._cache_revision
+
+    def invalidate_cache(self) -> None:
+        with self._cache_lock:
+            self._cache.clear()
+            self._cache_revision += 1
 
     def _execute(self, name, *args, **kwargs):
-        with self._uow_factory() as uow:
-            settings = self._integrations.settings
-            operations = _StoreOperations(
-                uow.session,
-                self._integrations.gemini_api_key(),
-                settings.gemini_embedding_model,
-                settings.gemini_embedding_dimensions,
-                settings.gemini_generation_model,
-                self._integrations.gemini_factory,
-            )
-            return _snapshot(getattr(operations, name)(*args, **kwargs))
+        ttl = 300 if name in self._REFERENCE_READS else 30 if name in self._CACHED_READS else 0
+        key = (name, args, tuple(sorted(kwargs.items())))
+        try:
+            hash(key)
+        except TypeError:
+            ttl = 0
+        for attempt in range(3):
+            with self._cache_lock:
+                revision = self._cache_revision
+                if ttl and key in self._cache:
+                    expires, cached = self._cache[key]
+                    if expires > monotonic():
+                        self._cache.move_to_end(key)
+                        return deepcopy(cached)
+                    del self._cache[key]
+            with self._uow_factory() as uow:
+                settings = self._integrations.settings
+                operations = _StoreOperations(
+                    uow.session,
+                    self._integrations.gemini_api_key(),
+                    settings.gemini_embedding_model,
+                    settings.gemini_embedding_dimensions,
+                    settings.gemini_generation_model,
+                    self._integrations.gemini_factory,
+                )
+                result = _snapshot(getattr(operations, name)(*args, **kwargs))
+                reservation_state_changed = getattr(operations, "reservation_state_changed", False)
+            if name in self._MUTATIONS or reservation_state_changed:
+                if reservation_state_changed or name not in {"expire_reservation_holds", "allocate_waiting_reservations", "allocate_released_reservations", "allocate_for_checkout"} or result:
+                    self.invalidate_cache()
+                return result
+            if not ttl:
+                return result
+            with self._cache_lock:
+                if revision == self._cache_revision:
+                    self._cache[key] = (monotonic() + ttl, deepcopy(result))
+                    self._cache.move_to_end(key)
+                    while len(self._cache) > 256:
+                        self._cache.popitem(last=False)
+                    return result
+            if attempt == 2:
+                raise BusinessError("Dữ liệu đang thay đổi liên tục; hãy làm mới và thử lại.")
 
     def gemini_key_source(self) -> str:
         return self._integrations.gemini_key_source()
@@ -178,11 +238,14 @@ class StoreService:
 
     def process_notifications(self):
         with self._uow_factory() as uow:
-            return process_notification_outbox(
+            result = process_notification_outbox(
                 NotificationQueries(uow.session),
                 self._integrations.email_sender(),
                 self._integrations.send_sms,
             )
+        if result.sent or result.failed or result.skipped:
+            self.invalidate_cache()
+        return result
 
     def create_voucher_from_text(self, code: str, value: str, actor_id: int):
         text = value.strip().lower()
@@ -235,14 +298,8 @@ class StoreService:
     def change_password(self, account_id: int, current: str, new_password: str) -> None:
         return self._execute("change_password", account_id, current, new_password)
 
-    def open_shift(self, employee_id: int, opening_cash: Decimal) -> ShiftView:
-        return self._execute("open_shift", employee_id, opening_cash)
 
-    def close_shift(self, shift_id: int, closing_cash: Decimal, actor_id: int) -> ShiftView:
-        return self._execute("close_shift", shift_id, closing_cash, actor_id)
 
-    def current_shift(self, employee_id: int) -> ShiftView | None:
-        return self._execute("current_shift", employee_id)
 
     def list_employees(self) -> list[EmployeeSummary]:
         return self._execute("list_employees")
@@ -261,14 +318,11 @@ class StoreService:
         )
 
     def add_customer(
-        self, full_name: str, phone: str, email: str = "", actor_id: int | None = None
+        self, full_name: str, phone: str, email: str = "", actor_id: int | None = None,
+        *, address: str = "", email_opt_in: bool = True, sms_opt_in: bool = True,
     ) -> CustomerView:
-        return self._execute("add_customer", full_name, phone, email, actor_id)
+        return self._execute("add_customer", full_name, phone, email, actor_id, address=address, email_opt_in=email_opt_in, sms_opt_in=sms_opt_in)
 
-    def adjust_reputation(
-        self, customer_id: int, delta: int, reason: str, actor_id: int
-    ) -> CustomerView:
-        return self._execute("adjust_reputation", customer_id, delta, reason, actor_id)
 
     def query_customers(
         self, text: str = "", page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec()
@@ -278,8 +332,14 @@ class StoreService:
     def list_customers(self, text: str = "") -> list[CustomerView]:
         return self._execute("list_customers", text)
 
+    def query_customers_with_premium(self, text: str = "", page_request: PageRequest = PageRequest()):
+        return self._execute("query_customers_with_premium", text, page_request)
+
     def premium_active(self, customer_id: int, on_date: date | None = None) -> bool:
         return self._execute("premium_active", customer_id, on_date)
+
+    def premium_until(self, customer_id: int, on_date: date | None = None) -> date | None:
+        return self._execute("premium_until", customer_id, on_date)
 
     def activate_premium(
         self,
@@ -341,10 +401,22 @@ class StoreService:
     ):
         return self._execute("list_catalog", text, item_type, available_only, page, page_size)
 
+    def query_checkout_catalog(self, filters=None, page_request=PageRequest(page_size=48), sort=SortSpec()):
+        return self._execute("query_checkout_catalog", filters, page_request, sort)
+
     def choose_checkout_copy(
         self, item_id: int, action: LineAction, excluded_copy_ids: set[int] | None = None
     ) -> CopyChoice | None:
-        return self._execute("choose_checkout_copy", item_id, action, excluded_copy_ids)
+        choices = self.checkout_copies(item_id, action, excluded_copy_ids)
+        return choices[0] if choices else None
+
+    def checkout_copies(
+        self, item_id: int, action: LineAction, excluded_copy_ids: set[int] | None = None,
+        customer_id: int | None = None,
+    ) -> list[CopyChoice]:
+        self._execute("expire_reservation_holds", None, item_id)
+        self._execute("allocate_waiting_reservations", item_id)
+        return self._execute("checkout_copies", item_id, action, excluded_copy_ids, customer_id)
 
     def list_genres(self) -> tuple[GenreView, ...]:
         return self._execute("list_genres")
@@ -365,6 +437,16 @@ class StoreService:
         self, show_id: int, season_number: int | None = None
     ) -> list[ShowEpisodeSummary]:
         return self._execute("list_show_episodes", show_id, season_number)
+
+    def season_checkout_choices(
+        self, show_id: int, season_number: int, action: LineAction,
+        customer_id: int | None = None, excluded_copy_ids: set[int] | None = None,
+        first_episode: int | None = None, last_episode: int | None = None,
+    ):
+        self._execute("expire_reservation_holds")
+        self._execute("allocate_released_reservations")
+        return self._execute("season_checkout_choices", show_id, season_number, action,
+                             customer_id, excluded_copy_ids, first_episode, last_episode)
 
     def create_show(
         self, title: str, overview: str = "", actor_id: int | None = None
@@ -403,16 +485,14 @@ class StoreService:
             "add_copy", item_id, barcode, media_format, actor_id, can_rent, can_sell
         )
 
-    def deposit_defaults(self) -> dict[str, Decimal]:
-        return self._execute("deposit_defaults")
+    def deposit_percent(self) -> Decimal:
+        return self._execute("deposit_percent")
 
-    def save_deposit_defaults(
-        self, values: dict[str, Decimal], actor_id: int
-    ) -> dict[str, Decimal]:
-        return self._execute("save_deposit_defaults", values, actor_id)
+    def save_deposit_percent(self, value: Decimal, actor_id: int) -> Decimal:
+        return self._execute("save_deposit_percent", value, actor_id)
 
-    def apply_deposit_defaults_to_inventory(self, actor_id: int) -> int:
-        return self._execute("apply_deposit_defaults_to_inventory", actor_id)
+
+
 
     def update_inventory_copy(
         self, copy_id: int, request: UpdateInventoryCopyRequest, actor_id: int
@@ -428,7 +508,6 @@ class StoreService:
         actor_id: int,
         rental_price: Decimal | None = None,
         sale_price: Decimal | None = None,
-        deposit_amount: Decimal | None = None,
     ) -> int:
         return self._execute(
             "bulk_update_catalog_prices",
@@ -436,7 +515,6 @@ class StoreService:
             actor_id,
             rental_price,
             sale_price,
-            deposit_amount,
         )
 
     def quote(
@@ -446,30 +524,34 @@ class StoreService:
         voucher_code: str | None = None,
         combo_ids: list[int] | None = None,
     ) -> Quote:
+        if lines:
+            self._execute("allocate_for_checkout", tuple(line.copy_id for line in lines))
         return self._execute("quote", customer_id, lines, voucher_code, combo_ids)
 
     def checkout(
         self,
         customer_id: int,
         employee_id: int,
-        shift_id: int | None,
         lines: list[CheckoutLine],
         payments: list[PaymentInput],
         voucher_code: str | None = None,
         combo_ids: list[int] | None = None,
         *,
         order_code: str | None = None,
+        expected_quote: Quote | None = None,
     ) -> OrderView:
+        if lines:
+            self._execute("allocate_for_checkout", tuple(line.copy_id for line in lines))
         return self._execute(
             "checkout",
             customer_id,
             employee_id,
-            shift_id,
             lines,
             payments,
             voucher_code,
             combo_ids,
             order_code=order_code,
+            expected_quote=expected_quote,
         )
 
     def query_active_rentals(
@@ -541,8 +623,20 @@ class StoreService:
         status: CopyStatus | None = None,
         page_request: PageRequest = PageRequest(),
         sort: SortSpec = SortSpec("title"),
+        text: str = "",
+        item_id: int | None = None,
+        condition: CopyCondition | None = None,
+        media: str = "",
+        rentable: bool = False,
+        sellable: bool = False,
     ) -> PagedResult[InventoryCopy]:
-        return self._execute("query_inventory", status, page_request, sort)
+        return self._execute("query_inventory", status, page_request, sort, text, item_id, condition, media, rentable, sellable)
+
+    def inventory_groups(self, status, text, condition, media, rentable, sellable, page_request, descending=False, item_id=None):
+        return self._execute("inventory_groups", status, text, condition, media, rentable, sellable, page_request, descending, item_id)
+
+    def inventory_group_episodes(self, show_id, status, text, condition, media, rentable, sellable, item_id=None):
+        return self._execute("inventory_group_episodes", show_id, status, text, condition, media, rentable, sellable, item_id)
 
     def list_inventory(
         self, status: CopyStatus | None = None, limit: int = 500
@@ -573,8 +667,35 @@ class StoreService:
     def allocate_waiting_reservations(self, item_id: int) -> int:
         return self._execute("allocate_waiting_reservations", item_id)
 
+    def allocate_released_reservations(self) -> int:
+        return self._execute("allocate_released_reservations")
+
     def dashboard(self) -> dict[str, Decimal | int]:
         return self._execute("dashboard")
+
+    def dashboard_low_stock(self):
+        return self._execute("dashboard_low_stock")
+
+    def query_dashboard_low_stock(self, page_request: PageRequest = PageRequest()):
+        return self._execute("query_dashboard_low_stock", page_request)
+
+    def dashboard_popular(self, action: LineAction):
+        return self._execute("dashboard_popular", action)
+
+    def dashboard_upcoming(self):
+        return self._execute("dashboard_upcoming")
+
+    def query_dashboard_upcoming(self, page_request: PageRequest = PageRequest()):
+        return self._execute("query_dashboard_upcoming", page_request)
+
+    def dashboard_discovery(self):
+        return self._execute("dashboard_discovery")
+
+    def dashboard_random(self):
+        return self._execute("dashboard_random")
+
+    def set_discovery_discount(self, item_id, percent, active, starts, ends, actor_id):
+        return self._execute("set_discovery_discount", item_id, percent, active, starts, ends, actor_id)
 
     def today_recommendations(self, limit: int = 8) -> list[Recommendation]:
         return self._execute("today_recommendations", limit)
@@ -621,3 +742,6 @@ class StoreService:
         self, start_on: date | None = None, end_on: date | None = None
     ) -> OperationalReport:
         return self._execute("operational_report", start_on, end_on)
+
+    def chart_report(self, start_on, end_on, action=None, genre_id=None):
+        return self._execute("chart_report", start_on, end_on, action, genre_id)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import messagebox, ttk
 from typing import Callable
 
 import ttkbootstrap as tb
@@ -116,27 +116,46 @@ class CommonWidgetsMixin:
         return update
 
     def _choose_payment_method(self, title: str, parent=None) -> PaymentMethod | None:
-        raw = simpledialog.askstring(
-            title,
-            "Phương thức: CASH, BANK_TRANSFER hoặc E_WALLET",
-            initialvalue=PaymentMethod.CASH.value,
-            parent=parent or self,
-        )
-        if raw is None:
-            return None
-        try:
-            return PaymentMethod(raw.strip().upper())
-        except ValueError:
-            messagebox.showerror(
-                title, "Phương thức thanh toán không hợp lệ.", parent=parent or self
-            )
-            return None
+        dialog = self._dialog(title, 420, 190)
+        options = {"Tiền mặt": PaymentMethod.CASH, "Chuyển khoản": PaymentMethod.BANK_TRANSFER, "Ví điện tử": PaymentMethod.E_WALLET}
+        value = tk.StringVar(value="Tiền mặt")
+        selected = []
+        ttk.Label(dialog, text="Phương thức thanh toán", padding=12).pack(anchor="w")
+        ttk.Combobox(dialog, textvariable=value, values=tuple(options), state="readonly").pack(fill=X, padx=12)
+
+        def confirm():
+            selected.append(options[value.get()])
+            dialog.destroy()
+
+        ttk.Button(dialog, text="Xác nhận", command=confirm, bootstyle="primary").pack(pady=12)
+        self.wait_window(dialog)
+        return selected[0] if selected else None
 
     def _quick_customer(self, combo) -> None:
-        name = simpledialog.askstring("Khách hàng mới", "Họ tên:", parent=self)
-        phone = simpledialog.askstring("Khách hàng mới", "Số điện thoại:", parent=self)
-        if name and phone:
-            self.store.add_customer(name, phone)
-            refresh = getattr(self.pages.get("Lập phiếu"), "refresh", None)
-            if refresh:
-                refresh()
+        dialog = self._dialog("Thêm khách hàng", 540, 440)
+        form = ttk.Frame(dialog, padding=14)
+        form.pack(fill="both", expand=True)
+        values = {key: tk.StringVar() for key in ("name", "phone", "email", "address")}
+        for label, key in (("Họ tên", "name"), ("Số điện thoại", "phone"), ("Email", "email"), ("Địa chỉ", "address")):
+            ttk.Label(form, text=label).pack(anchor="w")
+            ttk.Entry(form, textvariable=values[key]).pack(fill=X, pady=(0, 7))
+        email_opt_in, sms_opt_in = tk.BooleanVar(value=True), tk.BooleanVar(value=True)
+        ttk.Checkbutton(form, text="Đồng ý nhận email", variable=email_opt_in).pack(anchor="w")
+        ttk.Checkbutton(form, text="Đồng ý nhận SMS", variable=sms_opt_in).pack(anchor="w")
+
+        def save():
+            try:
+                customer = self.store.add_customer(values["name"].get(), values["phone"].get(), values["email"].get(), self.account.employee_id if self.account else None, address=values["address"].get(), email_opt_in=email_opt_in.get(), sms_opt_in=sms_opt_in.get())
+                dialog.destroy()
+                page = self.pages.get(self._active_page)
+                refresh = getattr(page, "refresh", None) if page else None
+                if refresh:
+                    refresh()
+                if combo is not None:
+                    match = next((value for value in combo.cget("values") if str(value).startswith(f"{customer.id} — ")), None)
+                    if match:
+                        combo.set(match)
+            except Exception as exc:
+                messagebox.showerror("Khách hàng", str(exc), parent=dialog)
+
+        ttk.Button(form, text="Lưu khách hàng", command=save, bootstyle="primary").pack(anchor="e", pady=10)

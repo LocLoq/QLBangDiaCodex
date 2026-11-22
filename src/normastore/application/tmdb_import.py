@@ -25,12 +25,11 @@ def copies(repo, item_id: int, count: int, prefix: str, can_sell: bool) -> None:
         )
 
 
-def mock_prices(seed: int) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+def mock_prices(seed: int) -> tuple[Decimal, Decimal, Decimal]:
     rental = Decimal(15000 + seed % 6 * 5000)
     sale = Decimal(100000 + seed % 9 * 50000)
     replacement = sale
-    deposit = (replacement * Decimal(50 + seed % 6 * 10) / Decimal(100)).quantize(Decimal("1"))
-    return rental, sale, deposit, replacement
+    return rental, sale, replacement
 
 
 def as_date(value: str | None) -> date | None:
@@ -120,7 +119,7 @@ def run_import(uow_factory, client, movie_limit: int, show_limit: int):
                     if repo.movie_exists(payload.tmdb_id):
                         continue
                     detail = client.localized_movie_detail(payload.tmdb_id)
-                    rental, sale, deposit, replacement = mock_prices(payload.tmdb_id)
+                    rental, sale, replacement = mock_prices(payload.tmdb_id)
                     can_sell = payload.tmdb_id % 10 < 7
                     item = CatalogItem(
                         item_type=ItemType.MOVIE,
@@ -134,7 +133,6 @@ def run_import(uow_factory, client, movie_limit: int, show_limit: int):
                         certification=certification(detail),
                         rental_price=rental,
                         sale_price=sale,
-                        deposit_amount=deposit,
                         replacement_value=replacement,
                         can_sell=can_sell,
                     )
@@ -191,7 +189,7 @@ def run_import(uow_factory, client, movie_limit: int, show_limit: int):
                             episode_seed = ep.get("id") or (
                                 payload.tmdb_id * 10000 + number * 100 + added
                             )
-                            rental, sale, deposit, replacement = mock_prices(episode_seed)
+                            rental, sale, replacement = mock_prices(episode_seed)
                             can_sell = episode_seed % 10 < 7
                             item = CatalogItem(
                                 item_type=ItemType.EPISODE,
@@ -205,14 +203,12 @@ def run_import(uow_factory, client, movie_limit: int, show_limit: int):
                                 episode_number=ep.get("episode_number"),
                                 rental_price=Decimal("18000"),
                                 sale_price=Decimal("130000"),
-                                deposit_amount=Decimal("90000"),
                                 replacement_value=Decimal("130000"),
                             )
                             item.release_date = as_date(ep.get("air_date"))
                             item.runtime_minutes = ep.get("runtime")
                             item.rental_price = rental
                             item.sale_price = sale
-                            item.deposit_amount = deposit
                             item.replacement_value = replacement
                             item.can_sell = can_sell
                             repo.add_item(item)

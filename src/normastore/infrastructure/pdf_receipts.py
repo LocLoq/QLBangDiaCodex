@@ -14,6 +14,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from normastore.application.contracts import OrderReceipt
+from normastore.domain.business_time import local_datetime
 from normastore.domain.enums import LineAction
 
 
@@ -45,6 +46,11 @@ class PdfReceiptExporter:
     def _action(action: LineAction) -> str:
         return "Thuê" if action == LineAction.RENT else "Mua"
 
+    @staticmethod
+    def _rental_state(value: str | None) -> str:
+        return {"ACTIVE": "Đang thuê", "RETURNED": "Đã trả", "PURCHASED": "Đã mua",
+                "LOST": "Đã mất", "CANCELLED": "Đã hủy"}.get(value, value or "—")
+
     def export(self, receipt: OrderReceipt, destination: Path, layout: str) -> Path:
         self._register_fonts()
         destination = Path(destination)
@@ -66,8 +72,8 @@ class PdfReceiptExporter:
         story.append(Paragraph("PHIẾU THUÊ / MUA BĂNG ĐĨA", ParagraphStyle("Receipt", parent=body, alignment=TA_CENTER, fontName=self.bold_font_name)))
         story.append(Spacer(1, 4))
         story.append(Paragraph(
-            f"<b>Mã phiếu:</b> {receipt.code}<br/><b>Lập lúc:</b> {receipt.created_at:%d/%m/%Y %H:%M}<br/>"
-            f"<b>Trạng thái:</b> {receipt.status}",
+            f"<b>Mã phiếu:</b> {receipt.code}<br/><b>Lập lúc:</b> {local_datetime(receipt.created_at):%d/%m/%Y %H:%M}<br/>"
+            f"<b>Trạng thái:</b> { {'CONFIRMED': 'Đã xác nhận', 'PARTIALLY_PAID': 'Chưa thanh toán đủ'}.get(receipt.status, receipt.status)}",
             body,
         ))
         customer_lines = [f"<b>Khách hàng:</b> {receipt.customer_name}"]
@@ -86,7 +92,7 @@ class PdfReceiptExporter:
                 Paragraph("Cọc", center), Paragraph("Hạn trả / trạng thái", center),
             ]]
             for index, line in enumerate(receipt.lines, start=1):
-                rental = f"{self._date(line.due_date)}<br/>{line.rental_state or '—'}"
+                rental = f"{self._date(line.due_date)}<br/>{self._rental_state(line.rental_state)}"
                 rows.append([
                     Paragraph(str(index), center),
                     Paragraph(f"{line.title}<br/><font size='7'>{line.barcode or '—'}</font>", body),
@@ -101,7 +107,7 @@ class PdfReceiptExporter:
                 detail = (
                     f"<b>{index}. {line.title}</b><br/>{line.barcode or '—'} • {self._action(line.action)}<br/>"
                     f"Giá {self._money(line.unit_price)} • Giảm {self._money(line.discount_amount)} • Cọc {self._money(line.deposit)}<br/>"
-                    f"Hạn trả: {self._date(line.due_date)} {line.rental_state or ''}"
+                    f"Hạn trả: {self._date(line.due_date)} {self._rental_state(line.rental_state)}"
                 )
                 rows.append([Paragraph(detail, body), Paragraph(self._money(line.net_amount + line.deposit), right)])
             table = Table(rows, colWidths=[51 * mm, 21 * mm], repeatRows=1)
@@ -117,20 +123,22 @@ class PdfReceiptExporter:
         story.extend([table, Spacer(1, 8)])
         if receipt.discounts:
             discount_text = "<br/>".join(
-                f"{discount.source}{f' ({discount.source_code})' if discount.source_code else ''}: -{self._money(discount.amount)}"
+                f"{ {'DISCOVERY': 'Khám phá', 'COMBO': 'Combo', 'PREMIUM': 'Hội viên', 'VOUCHER': 'Voucher'}.get(discount.source, discount.source)}{f' ({discount.source_code})' if discount.source_code else ''}: -{self._money(discount.amount)}"
                 for discount in receipt.discounts
             )
             story.extend([Paragraph("<b>Ưu đãi áp dụng</b><br/>" + discount_text, body), Spacer(1, 5)])
-        totals = [
-            ("Tổng trước giảm", receipt.gross_total), ("Giảm giá", -receipt.discount_total),
-            ("Tiền cọc", receipt.deposit_total), ("Tổng phải thu", receipt.total_due),
-            ("Đã thanh toán lúc lập phiếu", receipt.checkout_paid), ("Còn thiếu", receipt.balance_due),
-        ]
+        totals = [("Tổng trước giảm", receipt.gross_total), ("Giảm giá", -receipt.discount_total),
+                  ("Tiền cọc", receipt.deposit_total)]
+        if receipt.applied_deposit:
+            totals.append(("Cọc đã cấn", -receipt.applied_deposit))
+        totals.extend([("Tổng phải thu", receipt.total_due),
+                       ("Đã thanh toán lúc lập phiếu", receipt.checkout_paid), ("Còn thiếu", receipt.balance_due)])
         total_rows = [[Paragraph(f"<b>{label}</b>" if label in ("Tổng phải thu", "Còn thiếu") else label, body), Paragraph(
             f"<b>{self._money(value)}</b>" if label in ("Tổng phải thu", "Còn thiếu") else self._money(value), right,
         )] for label, value in totals]
         total_table = Table(total_rows, colWidths=[120 * mm if layout == "A4" else 50 * mm, 55 * mm if layout == "A4" else 22 * mm], hAlign="RIGHT")
-        total_table.setStyle(TableStyle([("LINEABOVE", (0, 3), (-1, 3), 0.8, colors.HexColor("#1F4E78")), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
+        total_row = next(index for index, (label, _value) in enumerate(totals) if label == "Tổng phải thu")
+        total_table.setStyle(TableStyle([("LINEABOVE", (0, total_row), (-1, total_row), 0.8, colors.HexColor("#1F4E78")), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
         story.extend([total_table, Spacer(1, 14)])
         if layout == "A4":
             signatures = Table([[Paragraph("<b>Khách hàng</b><br/><br/><br/><br/>(Ký và ghi rõ họ tên)", center), Paragraph("<b>Nhân viên</b><br/><br/><br/><br/>(Ký và ghi rõ họ tên)", center)]], colWidths=[85 * mm, 85 * mm])

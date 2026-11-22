@@ -10,7 +10,7 @@ from normastore.ui.formatting import vnd
 
 class PromotionsPageMixin:
     def promotions_page(self, page) -> None:
-        self._heading(page, "Combo / Voucher", "Ưu đãi áp theo Combo → Premium → Voucher, trần 50%")
+        self._heading(page, "Combo / Voucher", "Ưu đãi áp theo Khám phá → Combo → Premium → Voucher, trần 50%")
         notebook = ttk.Notebook(page)
         notebook.pack(fill=BOTH, expand=True)
         combo, voucher = ttk.Frame(notebook, padding=15), ttk.Frame(notebook, padding=15)
@@ -18,7 +18,7 @@ class PromotionsPageMixin:
         notebook.add(voucher, text="Voucher")
         ttk.Label(
             combo,
-            text="Combo cố định giảm giá khi giỏ có đủ toàn bộ item. Nhập ID phim/tập, phân cách bằng dấu phẩy.",
+            text="Combo cố định giảm giá khi giỏ có đủ toàn bộ phim hoặc tập. Nhập ID phim/tập, phân cách bằng dấu phẩy.",
             justify=LEFT,
         ).pack(anchor="nw")
 
@@ -54,7 +54,7 @@ class PromotionsPageMixin:
         def create_episode_combo():
             name = simpledialog.askstring("Combo tập phim", "Tên combo:", parent=self)
             show_id = (
-                simpledialog.askinteger("Combo tập phim", "ID bộ phim (Show):", parent=self)
+                simpledialog.askinteger("Combo tập phim", "ID bộ phim:", parent=self)
                 if name
                 else None
             )

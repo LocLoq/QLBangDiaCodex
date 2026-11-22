@@ -15,17 +15,16 @@
 - [ ] Apply and check migrations:
 
   ```powershell
-  & $py -c "from normastore.bootstrap import migrate_database; from normastore.config import Settings; migrate_database(Settings())"
-  & $py -m alembic current
+  & $py -m normastore.migrate
   ```
 
 ## Verification
 
 - [ ] Run `& $py -m pytest -q`.
 - [ ] Run `& $py -m compileall -q src tests scripts alembic`.
-- [ ] Start the app, sign in, open a shift, complete one rent/return and one sale/return.
+- [ ] Start the app, sign in, complete one rent/return and one sale/return.
 - [ ] Confirm Statistics can export CSV and PNG, including stockout ETA.
-- [ ] Confirm a due reminder is sent only when SMTP is configured; SMS remains `MOCK_SENT`.
+- [ ] Confirm a due reminder is sent only when SMTP is configured; SMS delivery remains simulated.
 
 ## Build and distribution
 
@@ -36,7 +35,7 @@
   ```
 
 - [ ] Verify `dist\NormaStore\NormaStore.exe`, `_internal\alembic.ini`, and `_internal\alembic_migrations\versions` are present.
-- [x] Compile `installer\normastore.iss` with Inno Setup 6.7.3 to create `dist\installer\NormaStore-Setup.exe`.
+- [ ] Compile `installer\normastore.iss` with Inno Setup to create `dist\installer\NormaStore-Setup.exe`.
 - [ ] Test the installer on a clean Windows machine that has compatible MySQL/Laragon and its own local `.env.local`.
 
 ## TMDB and AI data

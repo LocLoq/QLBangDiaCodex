@@ -31,6 +31,13 @@ class StockoutItem:
 
 
 @dataclass(frozen=True)
+class ChartReport:
+    revenue: tuple[tuple[date, LineAction, Decimal], ...]
+    damages: tuple[tuple[str, int], ...]
+    genres: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
 class OperationalReport:
     rental_revenue: Decimal
     sale_revenue: Decimal

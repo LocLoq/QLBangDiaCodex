@@ -7,12 +7,15 @@ from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import messagebox
+from typing import TYPE_CHECKING
 
 import ttkbootstrap as tb
-from matplotlib.figure import Figure
 from PIL import ImageTk
 
-from normastore.application.contracts import AccountView, ShiftView
+if TYPE_CHECKING:
+    from matplotlib.figure import Figure
+
+from normastore.application.contracts import AccountView
 from normastore.config import Settings
 from normastore.ui.media import PosterMixin
 from normastore.ui.pages import (
@@ -28,7 +31,7 @@ from normastore.ui.pages import (
     ReservationsPageMixin,
     ReturnsPageMixin,
     SettingsPageMixin,
-    ShiftsPageMixin,
+    EmployeesPageMixin,
     StatisticsPageMixin,
 )
 from normastore.ui.shell import ShellMixin
@@ -50,7 +53,7 @@ class NormaStoreApp(
     InventoryPageMixin,
     CustomersPageMixin,
     PromotionsPageMixin,
-    ShiftsPageMixin,
+    EmployeesPageMixin,
     NotificationsPageMixin,
     StatisticsPageMixin,
     AuditPageMixin,
@@ -67,7 +70,6 @@ class NormaStoreApp(
         self.dark_mode = tk.BooleanVar(value=preferences["theme"] == "superhero")
         self.font_scale = tk.StringVar(value=preferences["font_scale"])
         self.account: AccountView | None = None
-        self.current_shift: ShiftView | None = None
         self.executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="normastore")
         self.poster_cache = poster_cache
         self._poster_images: OrderedDict[str, ImageTk.PhotoImage] = OrderedDict()

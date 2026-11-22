@@ -5,8 +5,8 @@ from normastore.domain.enums import ReturnOutcome
 from normastore.domain.policies import damage_fee, effective_deposit, late_days, sale_return_allowed
 
 
-def test_deposit_combines_premium_and_reputation() -> None:
-    assert effective_deposit(Decimal("100000"), True, 90) == Decimal("60000")
+def test_deposit_applies_premium_discount() -> None:
+    assert effective_deposit(Decimal("100000"), True) == Decimal("70000")
 
 
 def test_late_days_and_damage() -> None:

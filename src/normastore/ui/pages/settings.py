@@ -12,7 +12,7 @@ from normastore.application.contracts import MockSeedRequest
 
 class SettingsPageMixin:
     def settings_page(self, page) -> None:
-        self._heading(page, "Cài đặt & About", "Kết nối, secret và attribution")
+        self._heading(page, "Cài đặt & Giới thiệu", "Kết nối, khóa truy cập và thông tin nguồn")
         ttk.Label(
             page,
             text=f"Database: {self.settings.database_url}\n\nTMDB/Gemini/SMTP không được hard-code. Đặt biến môi trường NORMASTORE_* hoặc lưu secret bằng Windows Credential Manager.\n\nThis product uses the TMDB API but is not endorsed or certified by TMDB.",
@@ -98,58 +98,21 @@ class SettingsPageMixin:
         test_button.pack(side=LEFT)
 
         if self._can_manage():
-            deposit_box = ttk.Labelframe(page, text="Tiền cọc mặc định theo định dạng", padding=12)
+            deposit_box = ttk.Labelframe(page, text="Tỷ lệ tiền cọc", padding=12)
             deposit_box.pack(fill=X, pady=(14, 0))
-            defaults = self.store.deposit_defaults()
-            values = {
-                name: tk.StringVar(value=str(defaults[name]))
-                for name in ("VHS", "VCD", "DVD", "Blu-ray")
-            }
-            for column, name in enumerate(values):
-                ttk.Label(deposit_box, text=name).grid(row=0, column=column, padx=5, sticky="w")
-                ttk.Entry(deposit_box, textvariable=values[name], width=13).grid(
-                    row=1, column=column, padx=5, sticky="ew"
-                )
-                deposit_box.columnconfigure(column, weight=1)
-            deposit_actions = ttk.Frame(deposit_box)
-            deposit_actions.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(10, 0))
+            deposit_percent = tk.StringVar(value=str(self.store.deposit_percent()))
+            ttk.Label(deposit_box, text="% giá bán của đĩa (trước khuyến mãi)").pack(side=LEFT)
+            ttk.Entry(deposit_box, textvariable=deposit_percent, width=10).pack(side=LEFT, padx=8)
 
-            def parsed_defaults():
-                return {
-                    name: Decimal(variable.get().replace(".", "").replace(",", "."))
-                    for name, variable in values.items()
-                }
-
-            def save_defaults():
+            def save_deposit_percent():
                 try:
-                    self.store.save_deposit_defaults(parsed_defaults(), self.account.employee_id)
-                    messagebox.showinfo("Tiền cọc", "Đã lưu mức cọc theo định dạng.", parent=self)
+                    value = Decimal(deposit_percent.get().strip().replace(",", "."))
+                    self.store.save_deposit_percent(value, self.account.employee_id)
+                    messagebox.showinfo("Tiền cọc", "Đã lưu tỷ lệ cọc.", parent=self)
                 except Exception as exc:
                     messagebox.showerror("Tiền cọc", str(exc), parent=self)
 
-            def apply_defaults():
-                if not messagebox.askyesno(
-                    "Tiền cọc",
-                    "Ghi đè cọc override của toàn bộ đĩa? Phiếu đã lập không thay đổi.",
-                    parent=self,
-                ):
-                    return
-                try:
-                    self.store.save_deposit_defaults(parsed_defaults(), self.account.employee_id)
-                    count = self.store.apply_deposit_defaults_to_inventory(self.account.employee_id)
-                    messagebox.showinfo("Tiền cọc", f"Đã áp dụng cho {count} bản đĩa.", parent=self)
-                except Exception as exc:
-                    messagebox.showerror("Tiền cọc", str(exc), parent=self)
-
-            ttk.Button(
-                deposit_actions, text="Lưu mức cọc", command=save_defaults, bootstyle="secondary"
-            ).pack(side=LEFT)
-            ttk.Button(
-                deposit_actions,
-                text="Áp dụng toàn kho",
-                command=apply_defaults,
-                bootstyle="warning",
-            ).pack(side=LEFT, padx=6)
+            ttk.Button(deposit_box, text="Lưu", command=save_deposit_percent).pack(side=LEFT)
             mock_box = ttk.Labelframe(page, text="Dữ liệu mock", padding=12)
             mock_box.pack(fill=X, pady=(14, 0))
             ttk.Label(

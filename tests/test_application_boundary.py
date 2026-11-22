@@ -1,12 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from functools import partial
-from threading import Barrier
+from threading import Barrier, Event
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import sessionmaker
 
 from normastore.application.contracts import (
@@ -16,6 +16,7 @@ from normastore.application.contracts import (
     CheckoutLine,
     CustomerView,
     PaymentInput,
+    PageRequest,
 )
 from normastore.application.services import StoreService
 from normastore.domain.enums import (
@@ -34,6 +35,7 @@ from normastore.infrastructure.database.models import (
     OrderLine,
     PhysicalCopy,
     RentalTerm,
+    Reservation,
     ReturnReceipt,
 )
 from normastore.infrastructure.database.unit_of_work import UnitOfWork
@@ -62,6 +64,73 @@ def test_service_returns_customer_view_after_session_close_and_rolls_back_errors
     with pytest.raises(BusinessError, match="đã tồn tại"):
         store.add_customer("Trùng số", "0987123987")
     assert store.list_customers("0987123987")[0] == customer
+
+
+def test_customer_page_includes_premium_state_and_paginated_views(store, session):
+    customers = [store.add_customer(f"Khách phân trang {index}", f"09876655{index:02d}") for index in range(3)]
+    store.activate_premium(customers[1].id, 30)
+    queries = []
+    def record_query(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            queries.append(statement)
+    connection = session.connection()
+    event.listen(connection, "before_cursor_execute", record_query)
+    try:
+        first = store.query_customers_with_premium("Khách phân trang", PageRequest(1, 2))
+    finally:
+        event.remove(connection, "before_cursor_execute", record_query)
+    second = store.query_customers_with_premium("Khách phân trang", PageRequest(2, 2))
+    assert len(queries) == 2
+    assert first.total_items == 3 and first.total_pages == 2
+    rows = (*first.items, *second.items)
+    assert all(isinstance(customer, CustomerView) for customer, _ in rows)
+    assert {customer.id for customer, active in rows if active} == {customers[1].id}
+
+
+def test_preorder_is_allocated_before_checkout_even_when_worker_has_not_run(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    first = store.add_customer("Khách đặt trước đầu", "0987111101")
+    second = store.add_customer("Khách đến sau", "0987111102")
+    item = store.save_catalog_item(actor, item_type="MOVIE", title="Phim vừa phát hành",
+                                   release_date=date.today() + timedelta(days=1))
+    copy = store.add_copy(item.id, "RELEASE-RACE-001", actor_id=actor)
+    store.reserve(first.id, [item.id], actor)
+    store.save_catalog_item(actor, id=item.id, release_date=date.today())
+    line = CheckoutLine(copy.id, LineAction.RENT, date.today() + timedelta(days=3))
+    with pytest.raises(BusinessError, match="không còn sẵn sàng"):
+        store.quote(second.id, [line])
+    session.expire_all()
+    reservation = session.query(Reservation).filter_by(item_id=item.id, customer_id=first.id).one()
+    assert reservation.state.value == "HELD" and reservation.allocated_copy_id == copy.id
+    assert store.checkout_copies(item.id, LineAction.RENT, customer_id=second.id) == []
+    assert store.checkout_copies(item.id, LineAction.RENT, customer_id=first.id)[0].copy_id == copy.id
+    assert store.quote(first.id, [line]).deposit > 0
+
+
+@pytest.mark.parametrize("entry_point", ["quote", "choices"])
+def test_expired_hold_is_reassigned_when_customer_chooses_copy(store, session, entry_point):
+    actor = store.authenticate("admin", "admin123").employee_id
+    first = store.add_customer("Khách hết hạn giữ", "0987111103")
+    second = store.add_customer("Khách chờ tiếp theo", "0987111104")
+    item = store.save_catalog_item(actor, item_type="MOVIE", title="Đĩa hết hạn giữ")
+    copy = store.add_copy(item.id, "EXPIRED-HOLD-001", actor_id=actor)
+    store.reserve(first.id, [item.id], actor)
+    store.reserve(second.id, [item.id], actor)
+    session.expire_all()
+    first_reservation = session.query(Reservation).filter_by(item_id=item.id, customer_id=first.id).one()
+    first_reservation.hold_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    session.flush()
+    revision = store.cache_revision
+    if entry_point == "quote":
+        line = CheckoutLine(copy.id, LineAction.RENT, date.today() + timedelta(days=3))
+        assert store.quote(second.id, [line]).deposit > 0
+    choices = store.checkout_copies(item.id, LineAction.RENT, customer_id=second.id)
+    assert [choice.copy_id for choice in choices] == [copy.id]
+    assert store.cache_revision > revision
+    session.expire_all()
+    assert session.query(Reservation).filter_by(id=first_reservation.id).one().state.value == "EXPIRED"
+    second_reservation = session.query(Reservation).filter_by(item_id=item.id, customer_id=second.id).one()
+    assert second_reservation.state.value == "HELD" and second_reservation.allocated_copy_id == copy.id
 
 
 def test_catalog_item_is_materialized_before_session_closes(store):
@@ -133,7 +202,7 @@ def test_checkout_and_partial_return_failure_are_atomic(store, session):
     order = store.checkout(
         customer.id,
         account.employee_id,
-        None,
+        
         [CheckoutLine(copy.id, LineAction.RENT, date.today() + timedelta(days=3))],
         [PaymentInput(PaymentMethod.CASH, Decimal("500000"))],
     )
@@ -153,22 +222,9 @@ def test_checkout_and_partial_return_failure_are_atomic(store, session):
     )
 
 
-def test_shift_buttons_use_employee_id(monkeypatch):
-    calls = []
-    fake = SimpleNamespace(
-        account=AccountView(47, 3, "user", "Nhân viên", RoleCode.STAFF, "Nhân viên", False),
-        current_shift=SimpleNamespace(id=8),
-        store=SimpleNamespace(
-            open_shift=lambda *args: calls.append(("open", args)),
-            close_shift=lambda *args: calls.append(("close", args)),
-        ),
-        _refresh_status=lambda: None,
-    )
-    monkeypatch.setattr("normastore.ui.shell.simpledialog.askfloat", lambda *args, **kwargs: 50)
-    ShellMixin._open_shift(fake)
-    fake.current_shift = SimpleNamespace(id=8)
-    ShellMixin._close_shift(fake)
-    assert calls == [("open", (3, Decimal("50"))), ("close", (8, Decimal("50"), 3))]
+def test_shell_does_not_require_shift_controls():
+    assert not hasattr(ShellMixin, "_open_shift")
+    assert not hasattr(ShellMixin, "_close_shift")
 
 
 def test_concurrent_service_calls_use_separate_units_of_work(monkeypatch):
@@ -203,3 +259,88 @@ def test_concurrent_service_calls_use_separate_units_of_work(monkeypatch):
     with ThreadPoolExecutor(max_workers=3) as executor:
         results = list(executor.map(lambda _: store.dashboard(), range(3)))
     assert len({result["session"] for result in results}) == 3
+
+
+def test_read_cache_expires_and_writes_invalidate_without_caching_quote(monkeypatch):
+    calls = {"dashboard": 0, "quote": 0, "write": 0}
+    clock = [100.0]
+
+    class FakeUnit:
+        def __enter__(self):
+            self.session = object()
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class FakeOperations:
+        def __init__(self, *_args):
+            pass
+
+        def dashboard(self):
+            calls["dashboard"] += 1
+            return {"count": calls["dashboard"]}
+
+        def quote(self, *_args):
+            calls["quote"] += 1
+            return calls["quote"]
+
+        def add_customer(self, *_args, **_kwargs):
+            calls["write"] += 1
+            return None
+
+    settings = SimpleNamespace(gemini_embedding_model="model", gemini_embedding_dimensions=2, gemini_generation_model="model")
+    integrations = SimpleNamespace(settings=settings, gemini_api_key=lambda: None, gemini_factory=lambda *args: None)
+    monkeypatch.setattr("normastore.application.services._StoreOperations", FakeOperations)
+    monkeypatch.setattr("normastore.application.services.monotonic", lambda: clock[0])
+    store = StoreService(FakeUnit, integrations)
+    result = store.dashboard()
+    result["count"] = 999
+    assert store.dashboard() == {"count": 1}
+    assert store.quote(1, []) == 1 and store.quote(1, []) == 2
+    clock[0] += 31
+    assert store.dashboard() == {"count": 2}
+    revision = store.cache_revision
+    store.add_customer("A", "1")
+    assert store.cache_revision == revision + 1
+    assert store.dashboard() == {"count": 3}
+
+
+def test_inflight_read_retries_after_write_instead_of_returning_stale_data(monkeypatch):
+    started, release = Event(), Event()
+    calls = []
+
+    class FakeUnit:
+        def __enter__(self):
+            self.session = object()
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class FakeOperations:
+        def __init__(self, *_args):
+            pass
+
+        def dashboard(self):
+            calls.append(len(calls) + 1)
+            value = calls[-1]
+            if value == 1:
+                started.set()
+                assert release.wait(5)
+            return {"count": value}
+
+        def add_customer(self, *_args, **_kwargs):
+            return None
+
+    settings = SimpleNamespace(gemini_embedding_model="model", gemini_embedding_dimensions=2, gemini_generation_model="model")
+    integrations = SimpleNamespace(settings=settings, gemini_api_key=lambda: None, gemini_factory=lambda *args: None)
+    monkeypatch.setattr("normastore.application.services._StoreOperations", FakeOperations)
+    store = StoreService(FakeUnit, integrations)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(store.dashboard)
+        assert started.wait(5)
+        store.add_customer("A", "1")
+        release.set()
+        assert pending.result()["count"] == 2
+    assert store.dashboard()["count"] == 2

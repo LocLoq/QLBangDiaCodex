@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -31,14 +31,6 @@ class AccountView:
     must_change_password: bool
 
 
-@dataclass(frozen=True)
-class ShiftView:
-    id: int
-    employee_id: int
-    opened_at: datetime
-    closed_at: datetime | None
-    opening_cash: Decimal
-    closing_cash: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -48,7 +40,6 @@ class CustomerView:
     phone: str
     email: str | None
     address: str | None
-    reputation_score: int
     email_opt_in: bool
     sms_opt_in: bool
 
@@ -68,9 +59,14 @@ class CatalogItemView:
     vote_average: Decimal | None
     rental_price: Decimal
     sale_price: Decimal
-    deposit_amount: Decimal
     can_rent: bool
     can_sell: bool
+    release_date: date | None = None
+    rental_price_mode: str = "DIRECT"
+    sale_price_mode: str = "DIRECT"
+    rental_price_percent: Decimal = Decimal("100")
+    sale_price_percent: Decimal = Decimal("100")
+    show_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -142,6 +138,7 @@ class CatalogFilters:
     require_rentable: bool = False
     require_sellable: bool = False
     item_rentable: bool = False
+    item_rentable_or_sellable: bool = False
 
 
 @dataclass(frozen=True)
@@ -158,6 +155,7 @@ class CatalogRow:
     total_copies: int
     rentable_copies: int
     sellable_copies: int
+    show_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -168,6 +166,8 @@ class CopyChoice:
     title: str
     action: LineAction
     unit_price: Decimal
+    media_format: str = ""
+    condition: CopyCondition = CopyCondition.GOOD
 
 
 @dataclass(frozen=True)
@@ -179,6 +179,8 @@ class Quote:
     line_prices: dict[int, Decimal]
     discount_sources: dict[str, Decimal]
     discount_source_codes: dict[str, str | None]
+    line_deposits: dict[int, Decimal] = field(default_factory=dict)
+    line_discounts: dict[int, Decimal] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -211,6 +213,28 @@ class InventoryCopy:
     status: CopyStatus
     can_rent: bool
     can_sell: bool
+    rental_price_override: Decimal | None = None
+    sale_price_override: Decimal | None = None
+    condition_percent: Decimal = Decimal("100")
+    rental_price_mode: str | None = None
+    sale_price_mode: str | None = None
+    rental_price_percent: Decimal | None = None
+    sale_price_percent: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class InventoryGroup:
+    group_id: int
+    title: str
+    is_show: bool
+
+
+@dataclass(frozen=True)
+class InventoryEpisode:
+    item_id: int
+    title: str
+    season_number: int
+    episode_number: int
 
 
 @dataclass(frozen=True)
@@ -223,8 +247,12 @@ class UpdateInventoryCopyRequest:
     status: CopyStatus
     rental_price_override: Decimal | None = None
     sale_price_override: Decimal | None = None
-    deposit_override: Decimal | None = None
     note: str = ""
+    condition_percent: Decimal = Decimal("100")
+    rental_price_mode: str | None = None
+    sale_price_mode: str | None = None
+    rental_price_percent: Decimal | None = None
+    sale_price_percent: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -400,6 +428,7 @@ class OrderReceipt:
     lines: tuple[OrderReceiptLine, ...]
     discounts: tuple[ReceiptDiscount, ...]
     payments: tuple[ReceiptPayment, ...]
+    applied_deposit: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True)

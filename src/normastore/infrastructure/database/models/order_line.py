@@ -18,6 +18,7 @@ class OrderLine(Base):
     copy_id: Mapped[int | None] = mapped_column(ForeignKey("physical_copies.id"))
     action: Mapped[LineAction] = mapped_column(Enum(LineAction), nullable=False)
     title_snapshot: Mapped[str] = mapped_column(String(255), nullable=False)
+    barcode_snapshot: Mapped[str | None] = mapped_column(String(80))
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     deposit_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)

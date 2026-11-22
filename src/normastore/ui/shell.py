@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import tkinter as tk
-from decimal import Decimal
+from time import monotonic
 from pathlib import Path
 from tkinter import messagebox, simpledialog, ttk
 
@@ -17,7 +17,7 @@ _DRAWER_WIDTH = 230
 _MDL2_FONT = "Segoe MDL2 Assets"
 _NAVIGATION_ITEMS = (
     ("Tổng quan", "\ue80f", "dashboard_page", False),
-    ("Lập phiếu", "\ue7bf", "checkout_page", False),
+    ("Tạo phiếu", "\ue7bf", "checkout_page", False),
     ("Phiếu đã lập", "\ue8fd", "orders_page", False),
     ("Trả đĩa & phạt", "\ue72b", "returns_page", False),
     ("Đặt trước", "\ue787", "reservations_page", False),
@@ -25,11 +25,11 @@ _NAVIGATION_ITEMS = (
     ("Kho đĩa", "\ue7b8", "inventory_page", False),
     ("Khách hàng & Premium", "\ue716", "customers_page", False),
     ("Combo / Voucher", "\ue8ec", "promotions_page", False),
-    ("Nhân viên & ca", "\ue916", "shifts_page", False),
+    ("Nhân viên", "\ue916", "employees_page", False),
     ("Thông báo", "\uea8f", "notifications_page", False),
     ("Thống kê", "\ueb05", "statistics_page", False),
     ("Nhật ký hành động", "\ue81c", "audit_page", True),
-    ("Cài đặt & About", "\ue713", "settings_page", False),
+    ("Cài đặt & Giới thiệu", "\ue713", "settings_page", False),
 )
 
 
@@ -159,9 +159,10 @@ class ShellMixin:
         self.content.pack(side=LEFT, fill=BOTH, expand=True)
         self.status = tk.StringVar()
         ttk.Separator(self, orient="horizontal").pack(fill=X, side="bottom")
-        ttk.Label(
-            self, textvariable=self.status, padding=(12, 6), anchor="w", bootstyle="secondary"
-        ).pack(fill=X, side="bottom")
+        status_bar = ttk.Frame(self)
+        status_bar.pack(fill=X, side="bottom")
+        ttk.Button(status_bar, text="Làm mới", command=self._refresh_current_page, bootstyle="link").pack(side=RIGHT, padx=6)
+        ttk.Label(status_bar, textvariable=self.status, padding=(12, 6), anchor="w", bootstyle="secondary").pack(side=LEFT, fill=X, expand=True)
         self._refresh_status()
         self._apply_ui_style()
         self._schedule_notification_worker()
@@ -254,6 +255,8 @@ class ShellMixin:
         def work() -> None:
             try:
                 self.store.process_notifications()
+                self.store.expire_reservation_holds()
+                self.store.allocate_released_reservations()
             except Exception:
                 pass
 
@@ -271,7 +274,7 @@ class ShellMixin:
         help_menu = tk.Menu(menu, tearoff=False)
         help_menu.add_command(
             label="Giới thiệu",
-            command=lambda: self.show_page("Cài đặt & About", self.settings_page),
+            command=lambda: self.show_page("Cài đặt & Giới thiệu", self.settings_page),
         )
         menu.add_cascade(label="Trợ giúp", menu=help_menu)
         self._menus = [menu, file_menu, help_menu]
@@ -308,10 +311,8 @@ class ShellMixin:
     def _refresh_status(self) -> None:
         if not self.account:
             return
-        self.current_shift = self.store.current_shift(self.account.employee_id)
-        ca = f"Ca #{self.current_shift.id} đang mở" if self.current_shift else "Chưa mở ca"
         self.status.set(
-            f"{self.account.employee_name} • {self.account.role_name} • {ca} • MySQL: kết nối"
+            f"{self.account.employee_name} • {self.account.role_name} • MySQL: kết nối"
         )
 
     def show_page(self, name: str, builder) -> None:
@@ -325,27 +326,24 @@ class ShellMixin:
             builder(page)
         page.pack(fill=BOTH, expand=True)
         refresh = getattr(page, "refresh", None)
-        if refresh:
+        revision = getattr(self.store, "cache_revision", 0)
+        last_refresh = getattr(page, "_last_refresh_time", 0)
+        last_revision = getattr(page, "_last_refresh_revision", -1)
+        if refresh and (last_revision != revision or monotonic() - last_refresh >= 30):
             refresh()
+            page._last_refresh_time = monotonic()
+            page._last_refresh_revision = getattr(self.store, "cache_revision", 0)
         self._active_page = name
         for label, buttons in self._nav_buttons.items():
             for button in buttons:
                 button.configure(bootstyle="primary" if label == name else "link")
 
-    def _open_shift(self) -> None:
-        if not self.account:
-            return
-        opening_cash = simpledialog.askfloat("Mở ca", "Tiền đầu ca:", minvalue=0, parent=self)
-        if opening_cash is None:
-            return
-        self.current_shift = self.store.open_shift(self.account.employee_id, Decimal(str(opening_cash)))
-        self._refresh_status()
+    def _refresh_current_page(self) -> None:
+        self.store.invalidate_cache()
+        page = self.pages.get(self._active_page)
+        refresh = getattr(page, "refresh", None) if page else None
+        if refresh:
+            refresh()
+            page._last_refresh_time = monotonic()
+            page._last_refresh_revision = self.store.cache_revision
 
-    def _close_shift(self) -> None:
-        if not self.current_shift or not self.account:
-            return
-        closing_cash = simpledialog.askfloat("Đóng ca", "Tiền cuối ca:", minvalue=0, parent=self)
-        if closing_cash is None:
-            return
-        self.store.close_shift(self.current_shift.id, Decimal(str(closing_cash)), self.account.employee_id)
-        self._refresh_status()

@@ -20,11 +20,11 @@ class Order(Base, Timestamped):
     code: Mapped[str] = mapped_column(String(30), unique=True, nullable=False)
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False)
     employee_id: Mapped[int] = mapped_column(ForeignKey("employees.id"), nullable=False)
-    shift_id: Mapped[int | None] = mapped_column(ForeignKey("shifts.id"))
     status: Mapped[str] = mapped_column(String(30), default="CONFIRMED")
     gross_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     discount_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
     deposit_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0)
+    deposit_applied: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     customer: Mapped[Customer] = relationship()
     employee: Mapped[Employee] = relationship()
     lines: Mapped[list["OrderLine"]] = relationship(

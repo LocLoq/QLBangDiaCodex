@@ -26,7 +26,7 @@ def test_receipt_pdf_contains_scalar_order_data(session, tmp_path):
     order = service.checkout(
         customer.id,
         employee_id,
-        None,
+        
         [CheckoutLine(copy.id, LineAction.RENT, date.today() + timedelta(days=3))],
         [PaymentInput(PaymentMethod.CASH, Decimal("0"))],
     )

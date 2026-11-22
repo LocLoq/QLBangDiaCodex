@@ -11,13 +11,13 @@ from normastore.application.contracts import PageRequest, SortSpec
 from normastore.domain.enums import (
     LineAction,
 )
-from normastore.ui.formatting import vnd
+from normastore.ui.formatting import ORDER_LABELS, RENTAL_LABELS, format_datetime, vnd
 
 
 class OrdersPageMixin:
     def orders_page(self, page) -> None:
         bar = self._heading(
-            page, "Phiếu đã lập", "Double-click để xem chi tiết phim/tập trong phiếu"
+            page, "Phiếu đã lập", "Nhấp đôi để xem chi tiết phim/tập trong phiếu"
         )
         search = tk.StringVar()
         ttk.Entry(bar, textvariable=search, width=35).pack(side=RIGHT)
@@ -100,8 +100,8 @@ class OrdersPageMixin:
                     values=(
                         order.customer_name,
                         order.employee_name,
-                        order.created_at.strftime("%d/%m/%Y %H:%M"),
-                        order.status,
+                        format_datetime(order.created_at),
+                        ORDER_LABELS.get(order.status, order.status),
                         vnd(order.total_due),
                     ),
                 )
@@ -122,7 +122,7 @@ class OrdersPageMixin:
             frame.pack(fill=BOTH, expand=True)
             ttk.Label(
                 frame,
-                text=f"{order.customer_name} • {order.created_at:%d/%m/%Y %H:%M} • Tổng cần thu: {vnd(order.total_due)}",
+                text=f"{order.customer_name} • {format_datetime(order.created_at)} • Tổng cần thu: {vnd(order.total_due)}",
                 font=("Segoe UI", 11, "bold"),
             ).pack(anchor="w", pady=(0, 8))
             lines_tree = self._create_treeview(
@@ -131,7 +131,7 @@ class OrdersPageMixin:
                 show="tree headings",
             )
             for key, title in [
-                ("barcode", "Barcode"),
+                ("barcode", "Mã vạch"),
                 ("action", "Loại"),
                 ("price", "Giá"),
                 ("deposit", "Cọc"),
@@ -151,7 +151,7 @@ class OrdersPageMixin:
                         vnd(line.unit_price),
                         vnd(line.deposit),
                         line.due_date or "—",
-                        line.rental_state or "—",
+                        RENTAL_LABELS.get(line.rental_state, "—"),
                     ),
                 )
             ttk.Button(
@@ -183,5 +183,6 @@ class OrdersPageMixin:
             sort_state,
             lambda: (page_number.set(1), refresh()),
         )
-        search.trace_add("write", lambda *_: (page_number.set(1), self.after(250, refresh)))
+        search_timer = {}
+        search.trace_add("write", lambda *_: (page_number.set(1), self._debounce(search_timer, refresh)))
         page.refresh = refresh

@@ -33,7 +33,7 @@ def _from_cache(repository, key: str, candidates: dict[int, CatalogItem], limit:
     if not row or _as_utc(row.expires_at) <= datetime.now(timezone.utc):
         return None
     results = [
-        Recommendation(item_id, candidates[item_id].title, "Đề cử đã lưu", "Cache")
+        Recommendation(item_id, candidates[item_id].title, "Đề cử đã lưu", "Đã lưu")
         for item_id in row.item_ids
         if item_id in candidates
     ]
@@ -60,7 +60,7 @@ def _recommend(
     cached = _from_cache(repository, key, by_id, limit)
     if cached:
         return cached
-    fallback_reason = "Đang được thuê nhiều, rating tốt và còn hàng"
+    fallback_reason = "Đang được thuê nhiều, điểm đánh giá tốt và còn hàng"
     local = [Recommendation(item.id, item.title, fallback_reason) for item in candidates[:limit]]
     if not api_key:
         return local

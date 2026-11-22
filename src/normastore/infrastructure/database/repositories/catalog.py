@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from datetime import date, datetime, timezone
 
 from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.orm import joinedload
@@ -16,6 +17,7 @@ from normastore.domain.enums import (
     CopyStatus,
     ItemType,
     LineAction,
+    ReservationState,
 )
 from normastore.infrastructure.database.models import (
     CatalogItem,
@@ -23,6 +25,7 @@ from normastore.infrastructure.database.models import (
     Genre,
     ItemGenre,
     PhysicalCopy,
+    Reservation,
     Season,
     Show,
 )
@@ -33,6 +36,10 @@ class CatalogQueries:
         self.session = session
 
     def checkout_copy(self, item_id, action, excluded_copy_ids):
+        rows = self.checkout_copies(item_id, action, excluded_copy_ids, limit=1)
+        return rows[0] if rows else None
+
+    def checkout_copies(self, item_id, action, excluded_copy_ids, limit=None, customer_id=None):
         allowed = (
             PhysicalCopy.can_rent.is_(True)
             if action == LineAction.RENT
@@ -43,22 +50,33 @@ class CatalogQueries:
             if action == LineAction.RENT
             else CatalogItem.can_sell.is_(True)
         )
+        allowed_status = PhysicalCopy.status == CopyStatus.AVAILABLE
+        if customer_id is not None:
+            own_hold = select(Reservation.id).where(
+                Reservation.allocated_copy_id == PhysicalCopy.id,
+                Reservation.customer_id == customer_id,
+                Reservation.state == ReservationState.HELD,
+                Reservation.hold_until > datetime.now(timezone.utc),
+            ).exists()
+            allowed_status = allowed_status | ((PhysicalCopy.status == CopyStatus.HELD) & own_hold)
         statement = (
             select(PhysicalCopy, CatalogItem)
             .join(CatalogItem)
             .where(
                 CatalogItem.id == item_id,
                 CatalogItem.archived.is_(False),
+                (CatalogItem.release_date.is_(None) | (CatalogItem.release_date <= date.today())),
                 item_allowed,
-                PhysicalCopy.status == CopyStatus.AVAILABLE,
+                allowed_status,
                 allowed,
             )
             .order_by(PhysicalCopy.barcode)
-            .limit(1)
         )
         if excluded_copy_ids:
             statement = statement.where(PhysicalCopy.id.not_in(excluded_copy_ids))
-        return self.session.execute(statement).one_or_none()
+        if limit is not None:
+            statement = statement.limit(limit)
+        return self.session.execute(statement).all()
 
     def reviews(self, item_id, show_id):
         review_filter = ExternalReview.item_id == item_id
@@ -72,6 +90,7 @@ class CatalogQueries:
         )
 
     def show_episode_rows(self, show_id, season_number):
+        released = or_(CatalogItem.release_date.is_(None), CatalogItem.release_date <= date.today())
         rentable = func.coalesce(
             func.sum(
                 case(
@@ -80,6 +99,7 @@ class CatalogQueries:
                             PhysicalCopy.status == CopyStatus.AVAILABLE,
                             PhysicalCopy.can_rent.is_(True),
                             CatalogItem.can_rent.is_(True),
+                            released,
                         ),
                         1,
                     ),
@@ -96,6 +116,7 @@ class CatalogQueries:
                             PhysicalCopy.status == CopyStatus.AVAILABLE,
                             PhysicalCopy.can_sell.is_(True),
                             CatalogItem.can_sell.is_(True),
+                            released,
                         ),
                         1,
                     ),
@@ -117,6 +138,7 @@ class CatalogQueries:
         return self.session.execute(statement).all()
 
     def _catalog_statement(self, filters: CatalogFilters):
+        released = or_(CatalogItem.release_date.is_(None), CatalogItem.release_date <= date.today())
         rentable = func.coalesce(
             func.sum(
                 case(
@@ -125,6 +147,7 @@ class CatalogQueries:
                             PhysicalCopy.status == CopyStatus.AVAILABLE,
                             PhysicalCopy.can_rent.is_(True),
                             CatalogItem.can_rent.is_(True),
+                            released,
                         ),
                         1,
                     ),
@@ -141,6 +164,7 @@ class CatalogQueries:
                             PhysicalCopy.status == CopyStatus.AVAILABLE,
                             PhysicalCopy.can_sell.is_(True),
                             CatalogItem.can_sell.is_(True),
+                            released,
                         ),
                         1,
                     ),
@@ -158,7 +182,8 @@ class CatalogQueries:
         )
         if filters.text.strip():
             term = f"%{filters.text.strip()}%"
-            stmt = stmt.where(or_(CatalogItem.title.like(term), CatalogItem.overview.like(term)))
+            stmt = stmt.where(or_(CatalogItem.title.like(term), CatalogItem.overview.like(term),
+                select(Show.id).where(Show.id == CatalogItem.show_id, Show.title.like(term)).exists()))
         if filters.item_type:
             stmt = stmt.where(CatalogItem.item_type == ItemType(filters.item_type))
         if filters.genre_id:
@@ -212,6 +237,8 @@ class CatalogQueries:
             stmt = stmt.having(sellable > 0)
         if filters.item_rentable:
             stmt = stmt.where(CatalogItem.can_rent.is_(True))
+        if filters.item_rentable_or_sellable:
+            stmt = stmt.where(CatalogItem.can_rent.is_(True) | CatalogItem.can_sell.is_(True))
         return stmt, total, rentable, sellable
 
     def query_catalog(
@@ -260,6 +287,7 @@ class CatalogQueries:
                     total_copies=int(copies or 0),
                     rentable_copies=int(rent_count or 0),
                     sellable_copies=int(sell_count or 0),
+                    show_id=item.show_id,
                 )
                 for item, copies, rent_count, sell_count in rows
             ),
@@ -268,6 +296,35 @@ class CatalogQueries:
             total_items=total_items,
             total_pages=total_pages,
         )
+
+    def query_checkout_catalog(self, filters=None, page_request=PageRequest(page_size=48), sort=SortSpec()):
+        items = self._catalog_statement(filters or CatalogFilters())[0].subquery()
+        is_show = items.c.show_id.is_not(None)
+        group_id = case((is_show, items.c.show_id), else_=items.c.id)
+        title = func.max(case((is_show, Show.title), else_=items.c.title)).label("title")
+        grouped = select(
+            func.min(items.c.id).label("item_id"), func.max(items.c.item_type).label("item_type"),
+            title, func.max(case((is_show, Show.overview), else_=items.c.overview)).label("overview"),
+            func.min(items.c.release_date).label("release_date"),
+            func.max(case((is_show, Show.vote_average), else_=items.c.vote_average)).label("vote_average"),
+            func.max(case((is_show, Show.poster_path), else_=items.c.poster_path)).label("poster_path"),
+            func.min(items.c.rental_price).label("rental_price"), func.min(items.c.sale_price).label("sale_price"),
+            func.sum(items.c.total_copies).label("total_copies"),
+            func.sum(items.c.rentable_copies).label("rentable_copies"),
+            func.sum(items.c.sellable_copies).label("sellable_copies"),
+            func.max(items.c.show_id).label("show_id"),
+        ).select_from(items.outerjoin(Show, Show.id == items.c.show_id)).group_by(is_show, group_id).subquery()
+        total_items = int(self.session.scalar(select(func.count()).select_from(grouped)) or 0)
+        page_size = max(1, min(page_request.page_size, 200))
+        total_pages = max(1, (total_items + page_size - 1) // page_size)
+        page = min(max(1, page_request.page), total_pages)
+        fields = {"type": grouped.c.item_type, "rating": grouped.c.vote_average}
+        expression = fields.get(sort.field, grouped.c.get(sort.field, grouped.c.title))
+        ordering = desc(expression) if sort.descending else expression.asc()
+        rows = self.session.execute(select(grouped).order_by(ordering, grouped.c.item_id)
+                                    .offset((page - 1) * page_size).limit(page_size)).mappings()
+        return PagedResult(items=tuple(CatalogRow(**dict(row)) for row in rows), page=page,
+                           page_size=page_size, total_items=total_items, total_pages=total_pages)
 
     def list_catalog(
         self,
@@ -304,6 +361,23 @@ class CatalogQueries:
             .where(ItemGenre.item_id == item.id)
             .order_by(Genre.name)
         )
+
+    def set_item_genres(self, item_id, names):
+        genre_ids = set()
+        for name in names:
+            genre = self.session.scalar(select(Genre).where(Genre.name == name))
+            if genre is None:
+                genre = Genre(name=name)
+                self.session.add(genre)
+                self.session.flush()
+            genre_ids.add(genre.id)
+        current = list(self.session.scalars(select(ItemGenre).where(ItemGenre.item_id == item_id)))
+        current_ids = {link.genre_id for link in current}
+        for link in current:
+            if link.genre_id not in genre_ids:
+                self.session.delete(link)
+        for genre_id in genre_ids - current_ids:
+            self.session.add(ItemGenre(item_id=item_id, genre_id=genre_id))
 
     def fetch_list_shows_rows(self):
         return self.session.execute(

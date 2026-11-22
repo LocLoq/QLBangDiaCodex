@@ -5,34 +5,36 @@ from tkinter import messagebox, simpledialog, ttk
 
 from ttkbootstrap.constants import BOTH, END, LEFT, RIGHT, X
 
+from normastore.application.contracts import PageRequest
 
 class CustomersPageMixin:
     def customers_page(self, page) -> None:
         bar = self._heading(
-            page, "Khách hàng & Premium", "Điểm uy tín ảnh hưởng cọc và hạn mức thuê"
+            page, "Khách hàng & Premium", "Quản lý khách hàng và hội viên"
         )
         search = tk.StringVar()
         ttk.Entry(bar, textvariable=search, width=35).pack(side=RIGHT)
         ttk.Label(bar, text="Tìm tên / SĐT:").pack(side=RIGHT, padx=(0, 4))
         tree = self._create_treeview(
-            page, columns=("phone", "email", "trust", "premium"), show="tree headings"
+            page, columns=("phone", "email", "premium"), show="tree headings"
         )
         tree.heading("#0", text="Khách hàng")
         tree.heading("phone", text="Số điện thoại")
         tree.heading("email", text="Email")
-        tree.heading("trust", text="Uy tín")
         tree.heading("premium", text="Premium")
         tree.pack(fill=BOTH, expand=True)
         bottom = ttk.Frame(page)
         bottom.pack(fill=X, pady=6)
         rows = {}
+        page_number = tk.IntVar(value=1)
 
         def refresh():
             tree.delete(*tree.get_children())
             rows.clear()
-            for customer in self.store.list_customers(search.get()):
+            result = self.store.query_customers_with_premium(search.get(), PageRequest(page_number.get(), 50))
+            pager(result)
+            for customer, premium in result.items:
                 rows[str(customer.id)] = customer
-                premium = self.store.premium_active(customer.id)
                 tree.insert(
                     "",
                     END,
@@ -41,7 +43,6 @@ class CustomersPageMixin:
                     values=(
                         customer.phone,
                         customer.email or "—",
-                        customer.reputation_score,
                         "Đang hiệu lực" if premium else "Thường",
                     ),
                 )
@@ -65,24 +66,6 @@ class CustomersPageMixin:
                     refresh()
                 except Exception as exc:
                     messagebox.showerror("Premium", str(exc), parent=self)
-
-        def adjust_reputation():
-            ids = tree.selection()
-            if len(ids) != 1:
-                return messagebox.showinfo("Uy tín", "Hãy chọn một khách hàng.", parent=self)
-            delta = simpledialog.askinteger(
-                "Uy tín", "Điều chỉnh điểm (ví dụ 5 hoặc -10):", parent=self
-            )
-            reason = (
-                simpledialog.askstring("Uy tín", "Lý do bắt buộc:", parent=self) if delta else None
-            )
-            if not reason:
-                return
-            try:
-                self.store.adjust_reputation(int(ids[0]), delta, reason, self.account.employee_id)
-                refresh()
-            except Exception as exc:
-                messagebox.showerror("Uy tín", str(exc), parent=self)
 
         def recommend():
             ids = tree.selection()
@@ -108,14 +91,9 @@ class CustomersPageMixin:
         ttk.Button(bottom, text="Kích hoạt Premium", command=premium, bootstyle="warning").pack(
             side=LEFT, padx=5
         )
-        ttk.Button(
-            bottom,
-            text="Điều chỉnh uy tín",
-            command=adjust_reputation,
-            bootstyle="secondary",
-            state="normal" if self._can_manage() else "disabled",
-        ).pack(side=LEFT, padx=5)
         button = ttk.Button(bottom, text="Đề cử phim", command=recommend, bootstyle="primary")
         button.pack(side=LEFT, padx=5)
-        search.trace_add("write", lambda *_: self.after(250, refresh))
+        pager = self._create_pager(page, page_number, refresh)
+        search_timer = {}
+        search.trace_add("write", lambda *_: self._debounce(search_timer, lambda: (page_number.set(1), refresh())))
         page.refresh = refresh

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from decimal import Decimal
 
 from sqlalchemy import desc, func, select
@@ -13,6 +13,7 @@ from normastore.application.contracts import (
     PageRequest,
     SortSpec,
 )
+from normastore.domain.business_time import utc_start_of_day
 from normastore.domain.enums import (
     CopyStatus,
     LineAction,
@@ -29,6 +30,7 @@ from normastore.infrastructure.database.models import (
     PhysicalCopy,
     RentalTerm,
     Reservation,
+    SaleReturn,
 )
 from normastore.infrastructure.database.repositories.pagination import page_rows
 
@@ -92,7 +94,7 @@ class OrderQueries:
         if text.strip():
             term = f"%{text.strip()}%"
             stmt = stmt.where((Order.code.like(term)) | (Customer.full_name.like(term)))
-        total_due = Order.gross_total - Order.discount_total + Order.deposit_total
+        total_due = Order.gross_total - Order.discount_total + Order.deposit_total - func.coalesce(Order.deposit_applied, 0)
         fields = {
             "title": Order.code,
             "customer": Customer.full_name,
@@ -116,7 +118,8 @@ class OrderQueries:
                     order.status,
                     Decimal(order.gross_total)
                     - Decimal(order.discount_total)
-                    + Decimal(order.deposit_total),
+                    + Decimal(order.deposit_total)
+                    - Decimal(order.deposit_applied or 0),
                 )
                 for order, customer, employee in page.items
             ),
@@ -126,13 +129,6 @@ class OrderQueries:
             page.total_pages,
         )
 
-    def fetch_open_rental_count_rows(self, customer_id):
-        return self.session.scalar(
-            select(func.count(RentalTerm.id))
-            .join(OrderLine)
-            .join(Order)
-            .where(Order.customer_id == customer_id, RentalTerm.state == RentalState.ACTIVE)
-        )
 
     def fetch_quote_copies(self, lines):
         return self.session.scalars(
@@ -185,6 +181,9 @@ class OrderQueries:
             .order_by(PaymentTransaction.created_at, PaymentTransaction.id)
         )
 
+    def get_order_line(self, identifier):
+        return self.session.get(OrderLine, identifier)
+
     def fetch_return_rentals_term(self, term_id):
         return self.session.scalar(
             select(RentalTerm)
@@ -233,10 +232,8 @@ class OrderQueries:
             .where(
                 OrderLine.action == LineAction.BUY,
                 PhysicalCopy.status == CopyStatus.SOLD,
-                Order.created_at
-                >= datetime.combine(
-                    today - timedelta(days=7), datetime.min.time(), tzinfo=timezone.utc
-                ),
+                Order.created_at >= utc_start_of_day(today - timedelta(days=7)),
+                ~select(SaleReturn.id).where(SaleReturn.sale_line_id == OrderLine.id).exists(),
             )
             .order_by(Order.created_at.desc())
         )
@@ -245,7 +242,8 @@ class OrderQueries:
         return self.session.scalar(
             select(OrderLine)
             .options(joinedload(OrderLine.copy), joinedload(OrderLine.order))
-            .where(OrderLine.id == sale_line_id, OrderLine.action == LineAction.BUY)
+            .where(OrderLine.id == sale_line_id, OrderLine.action == LineAction.BUY,
+                   ~select(SaleReturn.id).where(SaleReturn.sale_line_id == OrderLine.id).exists())
             .with_for_update()
         )
 

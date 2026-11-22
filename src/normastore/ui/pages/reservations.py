@@ -4,20 +4,22 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from ttkbootstrap.constants import BOTH, END, LEFT, X
+from ttkbootstrap.widgets.scrolled import ScrolledFrame
 
 from normastore.application.contracts import CatalogFilters, PageRequest, SortSpec
-from normastore.ui.formatting import vnd
+from normastore.domain.enums import ItemType
+from normastore.ui.formatting import RESERVATION_LABELS, format_datetime, vnd
 
 
 class ReservationsPageMixin:
     def reservations_page(self, page) -> None:
-        self._heading(page, "Đặt trước", "FIFO theo Movie / Episode • Giữ 24 giờ khi có hàng")
+        self._heading(page, "Đặt trước", "Theo thứ tự đặt • Giữ 24 giờ khi có hàng")
         tree = self._create_treeview(
             page, columns=("customer", "item", "state", "hold"), show="headings"
         )
         for column, title in [
             ("customer", "Khách"),
-            ("item", "Item"),
+            ("item", "Phim / tập"),
             ("state", "Trạng thái"),
             ("hold", "Giữ đến"),
         ]:
@@ -52,19 +54,23 @@ class ReservationsPageMixin:
                 state="readonly",
                 width=14,
             ).pack(anchor="e", pady=(0, 5))
+            picker_area = ttk.Frame(frame)
+            picker_area.pack(fill=BOTH, expand=True)
             picker = self._create_treeview(
-                frame, columns=("type", "stock"), show="tree headings", selectmode="extended"
+                picker_area, columns=("type", "stock"), show="tree headings", selectmode="extended"
             )
             picker.heading("#0", text="Phim / tập")
             picker.heading("type", text="Loại")
-            picker.heading("stock", text="Có sẵn")
+            picker.heading("stock", text="Sẵn thuê / mua")
             picker.pack(fill=BOTH, expand=True)
-            card_area = ttk.Frame(frame)
+            card_area = ScrolledFrame(picker_area, autohide=False)
             selected_item_ids: set[int] = set()
             item_page = tk.IntVar(value=1)
             item_sort: dict[str, object] = {"field": "#0", "descending": False}
 
             def load_customers():
+                if not dialog.winfo_exists():
+                    return
                 previous = customer_var.get()
                 values = []
                 customers.clear()
@@ -78,13 +84,15 @@ class ReservationsPageMixin:
                 )
 
             def load_items():
+                if not dialog.winfo_exists():
+                    return
                 picker.delete(*picker.get_children())
                 for child in card_area.winfo_children():
                     child.destroy()
                 field = {"#0": "title", "stock": "rentable_copies"}.get(
                     str(item_sort["field"]), str(item_sort["field"])
                 )
-                result = self.store.query_catalog(CatalogFilters(text=search_var.get(), item_rentable=True), PageRequest(item_page.get(), 48), SortSpec(field, bool(item_sort['descending'])))
+                result = self.store.query_catalog(CatalogFilters(text=search_var.get(), item_rentable_or_sellable=True), PageRequest(item_page.get(), 48), SortSpec(field, bool(item_sort['descending'])))
                 item_pager(result)
                 for index, item in enumerate(result.items):
                     picker.insert(
@@ -92,7 +100,7 @@ class ReservationsPageMixin:
                         END,
                         iid=str(item.item_id),
                         text=item.title,
-                        values=(item.item_type.value, item.rentable_copies),
+                        values=("Phim lẻ" if item.item_type == ItemType.MOVIE else "Tập phim", f"{item.rentable_copies} / {item.sellable_copies}"),
                     )
                     if view_mode.get() == "Thẻ":
                         card = ttk.Labelframe(card_area, text=item.title, padding=8)
@@ -110,12 +118,12 @@ class ReservationsPageMixin:
                         ).pack(anchor="w")
                         ttk.Label(
                             card,
-                            text=f"{item.item_type.value} • Rating {item.vote_average or '—'}",
+                            text=f"{'Phim lẻ' if item.item_type == ItemType.MOVIE else 'Tập phim'} • Điểm {item.vote_average or '—'}",
                             bootstyle="secondary",
                         ).pack(anchor="w")
                         ttk.Label(
                             card,
-                            text=f"Thuê {vnd(item.rental_price)} • Sẵn thuê: {item.rentable_copies}",
+                            text=f"Giá gốc thuê {vnd(item.rental_price)} • mua {vnd(item.sale_price)}\nSẵn thuê: {item.rentable_copies} • mua: {item.sellable_copies}",
                             wraplength=210,
                         ).pack(anchor="w", pady=(4, 0))
                         ttk.Label(
@@ -150,17 +158,18 @@ class ReservationsPageMixin:
             item_pager = self._create_pager(frame, item_page, load_items)
             self._install_sortable_headings(
                 picker,
-                {"#0": "Phim / tập", "type": "Loại", "stock": "Có sẵn"},
+                {"#0": "Phim / tập", "type": "Loại", "stock": "Sẵn thuê / mua"},
                 item_sort,
                 lambda: (item_page.set(1), load_items()),
             )
-            debounce_state: dict[str, str] = {}
+            customer_debounce: dict[str, str] = {}
+            item_debounce: dict[str, str] = {}
             customer_search_var.trace_add(
-                "write", lambda *_: self._debounce(debounce_state, load_customers)
+                "write", lambda *_: self._debounce(customer_debounce, load_customers)
             )
             search_var.trace_add(
                 "write",
-                lambda *_: self._debounce(debounce_state, lambda: (item_page.set(1), load_items())),
+                lambda *_: self._debounce(item_debounce, lambda: (item_page.set(1), load_items())),
             )
             view_mode.trace_add("write", lambda *_: load_items())
             load_customers()
@@ -178,8 +187,8 @@ class ReservationsPageMixin:
                     values=(
                         reservation.customer_name,
                         reservation.item_title,
-                        reservation.state,
-                        reservation.hold_until or "—",
+                        RESERVATION_LABELS[reservation.state],
+                        format_datetime(reservation.hold_until),
                     ),
                 )
 
@@ -188,13 +197,13 @@ class ReservationsPageMixin:
         )
         ttk.Label(
             bottom,
-            text="Chọn trực tiếp khách hàng và Movie/Episode trong cửa sổ đặt trước.",
+            text="Chọn khách hàng và phim hoặc tập phim trong cửa sổ đặt trước.",
             bootstyle="secondary",
         ).pack(side=LEFT, padx=10)
         pager = self._create_pager(page, page_number, refresh)
         self._install_sortable_headings(
             tree,
-            {"customer": "Khách", "item": "Item", "state": "Trạng thái", "hold": "Giữ đến"},
+            {"customer": "Khách", "item": "Phim / tập", "state": "Trạng thái", "hold": "Giữ đến"},
             sort_state,
             lambda: (page_number.set(1), refresh()),
         )

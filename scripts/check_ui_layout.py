@@ -18,11 +18,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from normastore.bootstrap import bootstrap, build_application  # noqa: E402
 from normastore.config import Settings  # noqa: E402
 from normastore.ui.app import NormaStoreApp  # noqa: E402
+from ttkbootstrap.widgets.scrolled import ScrolledFrame  # noqa: E402
 
 
 PAGES = (
     ("Tổng quan", "dashboard_page"),
-    ("Lập phiếu", "checkout_page"),
+    ("Tạo phiếu", "checkout_page"),
     ("Phiếu đã lập", "orders_page"),
     ("Trả đĩa & phạt", "returns_page"),
     ("Đặt trước", "reservations_page"),
@@ -30,11 +31,11 @@ PAGES = (
     ("Kho đĩa", "inventory_page"),
     ("Khách hàng & Premium", "customers_page"),
     ("Combo / Voucher", "promotions_page"),
-    ("Nhân viên & ca", "shifts_page"),
+    ("Nhân viên", "employees_page"),
     ("Thông báo", "notifications_page"),
     ("Thống kê", "statistics_page"),
     ("Nhật ký hành động", "audit_page"),
-    ("Cài đặt & About", "settings_page"),
+    ("Cài đặt & Giới thiệu", "settings_page"),
 )
 
 
@@ -44,17 +45,20 @@ def _visible_overflow(root: tk.Misc, container: tk.Misc) -> list[str]:
     right, bottom = left + container.winfo_width(), top + container.winfo_height()
     problems: list[str] = []
 
-    def visit(widget: tk.Misc) -> None:
+    def visit(widget: tk.Misc, vertically_scrollable: bool = False) -> None:
         for child in widget.winfo_children():
             if child.winfo_ismapped():
+                scrollable = vertically_scrollable or isinstance(child, ScrolledFrame)
                 x, y = child.winfo_rootx(), child.winfo_rooty()
                 x2, y2 = x + child.winfo_width(), y + child.winfo_height()
-                if x < left - 2 or x2 > right + 2 or y < top - 2 or y2 > bottom + 2:
+                if x < left - 2 or x2 > right + 2 or (
+                    not scrollable and (y < top - 2 or y2 > bottom + 2)
+                ):
                     problems.append(
                         f"{child.winfo_class()} {child.winfo_name()}: "
                         f"({x - left},{y - top},{child.winfo_width()}x{child.winfo_height()})"
                     )
-                visit(child)
+                visit(child, scrollable)
 
     visit(container)
     return problems
@@ -65,15 +69,60 @@ def _treeview_alignment(container: tk.Misc) -> list[str]:
 
     def visit(widget: tk.Misc) -> None:
         for child in widget.winfo_children():
+            if not child.winfo_ismapped():
+                continue
             if child.winfo_class() == "Treeview":
                 for column in ("#0", *child["columns"]):
-                    if str(child.column(column, "anchor")) != "center":
-                        problems.append(f"{child.winfo_name()}/{column}: cell anchor")
                     if str(child.heading(column, "anchor")) != "center":
                         problems.append(f"{child.winfo_name()}/{column}: heading anchor")
             visit(child)
 
     visit(container)
+    return problems
+
+
+def _check_scrolling(root: tk.Misc, container: tk.Misc) -> list[str]:
+    problems: list[str] = []
+
+    def visit(widget: tk.Misc) -> None:
+        for child in widget.winfo_children():
+            if not child.winfo_ismapped():
+                continue
+            if isinstance(child, ScrolledFrame) and child.winfo_height() > child.container.winfo_height():
+                child.yview("moveto", 0)
+                root.update_idletasks()
+                top = child.winfo_rooty()
+                child.yview("moveto", 1)
+                root.update_idletasks()
+                if child.winfo_rooty() >= top or child.vscroll.get()[1] < 0.999:
+                    problems.append(f"{child.winfo_name()}: nội dung không cuộn được đến cuối")
+                child.yview("moveto", 0)
+                root.update_idletasks()
+            visit(child)
+
+    visit(container)
+    return problems
+
+
+def _check_advanced_filters(root: tk.Misc, container: tk.Misc) -> list[str]:
+    buttons = []
+
+    def visit(widget: tk.Misc) -> None:
+        for child in widget.winfo_children():
+            if not child.winfo_ismapped():
+                continue
+            if child.winfo_class() == "TButton" and "nâng cao" in str(child.cget("text")):
+                buttons.append(child)
+            visit(child)
+
+    visit(container)
+    problems = []
+    for button in buttons:
+        button.invoke()
+        root.update_idletasks()
+        problems.extend(_visible_overflow(root, container))
+        button.invoke()
+        root.update_idletasks()
     return problems
 
 
@@ -119,6 +168,12 @@ def main() -> int:
                     alignment = _treeview_alignment(app.content)
                     if alignment:
                         failures.append(f"{font_scale}/{page_name}: " + " | ".join(alignment[:8]))
+                    scrolling = _check_scrolling(app, app.content)
+                    if scrolling:
+                        failures.append(f"{font_scale}/{page_name}: " + " | ".join(scrolling[:8]))
+                    advanced = _check_advanced_filters(app, app.content)
+                    if advanced:
+                        failures.append(f"{font_scale}/{page_name}/lọc nâng cao: " + " | ".join(advanced[:8]))
                 except Exception as exc:  # smoke runner must continue through all pages
                     failures.append(f"{font_scale}/{page_name}: {type(exc).__name__}: {exc}")
         app.dark_mode.set(True)

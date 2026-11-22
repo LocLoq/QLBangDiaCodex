@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
-from normastore.infrastructure.database.models import AuditLog, Employee, Role, Shift, UserAccount
+from normastore.infrastructure.database.models import AuditLog, Employee, Role, UserAccount
 
 
 class AccountsRepository:
@@ -21,13 +21,7 @@ class AccountsRepository:
     def employee(self, employee_id):
         return self.session.get(Employee, employee_id)
 
-    def shift(self, shift_id):
-        return self.session.get(Shift, shift_id)
 
-    def current_shift(self, employee_id):
-        return self.session.scalar(
-            select(Shift).where(Shift.employee_id == employee_id, Shift.closed_at.is_(None))
-        )
 
     def employees(self):
         return self.session.execute(
@@ -53,9 +47,6 @@ class AccountsRepository:
             .where(UserAccount.employee_id == employee_id)
         )
 
-    def save_shift(self, shift):
-        self.session.add(shift)
-        self.session.flush()
 
     def save_employee(self, employee):
         self.session.add(employee)
