@@ -13,6 +13,7 @@ from normastore.domain.enums import (
     RentalState,
     ReservationState,
     RoleCode,
+    ReturnOutcome,
 )
 
 
@@ -67,6 +68,7 @@ class CatalogItemView:
     rental_price_percent: Decimal = Decimal("100")
     sale_price_percent: Decimal = Decimal("100")
     show_id: int | None = None
+    poster_path: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,17 @@ class CheckoutLine:
 class PaymentInput:
     method: PaymentMethod
     amount: Decimal
+
+
+@dataclass(frozen=True)
+class RentalReturnInput:
+    term_id: int
+    outcome: ReturnOutcome
+    note: str = ""
+    condition: CopyCondition | None = None
+    condition_percent: Decimal | None = None
+    status: CopyStatus | None = None
+    damage_charge: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -168,6 +181,10 @@ class CopyChoice:
     unit_price: Decimal
     media_format: str = ""
     condition: CopyCondition = CopyCondition.GOOD
+    condition_percent: Decimal = Decimal("100")
+    aisle: str | None = None
+    rack: str | None = None
+    compartment: str | None = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +208,17 @@ class ActiveRental:
     title: str
     barcode: str
     due_date: date
+    late_daily_rate: Decimal = Decimal("5000")
+    condition: CopyCondition = CopyCondition.GOOD
+    condition_percent: Decimal = Decimal("100")
+    aisle: str | None = None
+    rack: str | None = None
+    compartment: str | None = None
+    deposit_amount: Decimal = Decimal("0")
+    replacement_value: Decimal = Decimal("0")
+    deposit_paid: Decimal = Decimal("0")
+    order_code: str = ""
+    order_balance_due: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True)
@@ -220,6 +248,9 @@ class InventoryCopy:
     sale_price_mode: str | None = None
     rental_price_percent: Decimal | None = None
     sale_price_percent: Decimal | None = None
+    aisle: str | None = None
+    rack: str | None = None
+    compartment: str | None = None
 
 
 @dataclass(frozen=True)
@@ -253,6 +284,9 @@ class UpdateInventoryCopyRequest:
     sale_price_mode: str | None = None
     rental_price_percent: Decimal | None = None
     sale_price_percent: Decimal | None = None
+    aisle: str | None = None
+    rack: str | None = None
+    compartment: str | None = None
 
 
 @dataclass(frozen=True)
@@ -314,6 +348,8 @@ class ReservationView:
     item_title: str
     state: ReservationState
     hold_until: datetime | None
+    item_id: int | None = None
+    show_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -323,6 +359,7 @@ class ShowSummary:
     overview: str | None
     vote_average: Decimal | None
     season_count: int
+    poster_path: str | None = None
 
 
 @dataclass(frozen=True)

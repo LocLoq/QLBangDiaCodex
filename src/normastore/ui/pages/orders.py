@@ -17,7 +17,7 @@ from normastore.ui.formatting import ORDER_LABELS, RENTAL_LABELS, format_datetim
 class OrdersPageMixin:
     def orders_page(self, page) -> None:
         bar = self._heading(
-            page, "Phiếu đã lập", "Nhấp đôi để xem chi tiết phim/tập trong phiếu"
+            page, "Hóa đơn đã tạo", "Nhấp đôi để xem chi tiết phim/tập trong phiếu"
         )
         search = tk.StringVar()
         ttk.Entry(bar, textvariable=search, width=35).pack(side=RIGHT)

@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from normastore.application.ai_search import search_local
-from normastore.application.contracts import BusinessError, CatalogFilters, CheckoutLine, PageRequest, PaymentInput, SortSpec, UpdateInventoryCopyRequest
+from normastore.application.contracts import BusinessError, CatalogFilters, CheckoutLine, PageRequest, PaymentInput, RentalReturnInput, SortSpec, UpdateInventoryCopyRequest
 from normastore.application._operations import _StoreOperations
 from normastore.domain.enums import (
     CopyCondition,
@@ -28,6 +28,8 @@ from normastore.infrastructure.database.models import (
     OrderLine,
     PaymentTransaction,
     PremiumMembership,
+    PenaltyCharge,
+    RentalExtension,
     RentalTerm,
 )
 from normastore.jobs import process_notification_outbox
@@ -826,6 +828,70 @@ def test_return_records_deposit_refund_in_ledger(session):
     session.rollback()
 
 
+def test_overdue_return_shows_recorded_deposit_and_deducts_penalty(session):
+    service = _StoreOperations(session)
+    actor = manager_id(session)
+    customer = service.list_customers()[0]
+    item = service.save_catalog_item(actor, item_type="MOVIE", title="Kiểm tra phạt trả trễ")
+    copy = service.add_copy(item.id, "RETURN-LATE-TEST", actor_id=actor)
+    due = date.today() + timedelta(days=1)
+    order = service.checkout(customer.id, actor, [CheckoutLine(copy.id, LineAction.RENT, due)],
+                             [PaymentInput(PaymentMethod.CASH, Decimal("500000"))])
+    term = session.query(RentalTerm).filter_by(line_id=order.lines[0].id).one()
+    rental = next(row for row in service.active_rentals() if row.term_id == term.id)
+    assert rental.deposit_amount == order.lines[0].deposit_amount
+    assert rental.replacement_value == item.replacement_value
+    penalty = Decimal(term.late_daily_rate) * 2
+    balance = service.return_rentals(actor, customer.id, [(term.id, ReturnOutcome.NORMAL, "")],
+                                     today=due + timedelta(days=2))
+    session.flush()
+    assert balance == penalty - rental.deposit_amount
+    assert session.query(PenaltyCharge).filter_by(rental_term_id=term.id, kind="LATE").one().amount == penalty
+    if balance < 0:
+        assert session.query(PaymentTransaction).filter_by(customer_id=customer.id, category="DEPOSIT_REFUND", amount=balance).count() >= 1
+    session.rollback()
+
+
+def test_partial_checkout_uses_actual_deposit_across_separate_returns(session):
+    service = _StoreOperations(session)
+    actor = manager_id(session)
+    customer = service.list_customers()[0]
+    item = service.save_catalog_item(actor, item_type="MOVIE", title="Kiểm tra cọc thu một phần")
+    copies = [service.add_copy(item.id, f"RETURN-PARTIAL-{i}", actor_id=actor) for i in (1, 2)]
+    lines = [CheckoutLine(copy.id, LineAction.RENT, date.today()) for copy in copies]
+    paid = Decimal("60001.01")
+    quote = service.quote(customer.id, lines)
+    assert paid < quote.deposit
+    order = service.checkout(customer.id, actor, lines, [PaymentInput(PaymentMethod.CASH, paid)])
+    first, second = sorted(
+        (row for row in service.active_rentals() if row.order_code == order.code),
+        key=lambda row: row.term_id,
+    )
+    assert first.order_balance_due == second.order_balance_due == quote.total_due - paid
+    assert (first.deposit_paid, second.deposit_paid) == (Decimal("30000.50"), Decimal("30000.51"))
+
+    with pytest.raises(BusinessError, match="số nguyên không âm"), session.begin_nested():
+        service.return_rentals(actor, customer.id, [
+            RentalReturnInput(second.term_id, ReturnOutcome.LIGHT_DAMAGE, damage_charge=Decimal("-1")),
+        ])
+    before = session.query(PaymentTransaction.id).order_by(PaymentTransaction.id.desc()).first()[0]
+    assert service.return_rentals(actor, customer.id, [
+        RentalReturnInput(second.term_id, ReturnOutcome.LIGHT_DAMAGE, damage_charge=Decimal("7000")),
+    ]) == Decimal("-23000.51")
+    assert service.return_rentals(actor, customer.id, [
+        RentalReturnInput(first.term_id, ReturnOutcome.HEAVY_DAMAGE, damage_charge=Decimal("0")),
+    ]) == Decimal("-30000.50")
+    session.flush()
+    penalty = session.query(PenaltyCharge).filter_by(rental_term_id=second.term_id).one()
+    assert (penalty.kind, penalty.amount) == ("LIGHT_DAMAGE", Decimal("7000"))
+    assert not session.query(PenaltyCharge).filter_by(rental_term_id=first.term_id).count()
+    refunds = session.query(PaymentTransaction).filter(
+        PaymentTransaction.id > before, PaymentTransaction.category == "DEPOSIT_REFUND",
+    ).all()
+    assert sum(row.amount for row in refunds) == Decimal("7000") - paid
+    assert service.order_receipt(order.id).balance_due == quote.total_due - paid
+
+
 def test_bulk_catalog_price_edit_updates_selected_items(session):
     service = _StoreOperations(session)
     first = service.list_catalog()[0][0]
@@ -915,6 +981,41 @@ def test_staff_cannot_extend_overdue_rental(session):
 
     with pytest.raises(BusinessError, match="Quản lý"):
         service.extend_rental(term.id, staff.id)
+    session.rollback()
+
+
+def test_extend_overdue_records_late_once_and_negotiated_fee(session):
+    service = _StoreOperations(session)
+    actor = manager_id(session)
+    customer = service.list_customers()[0]
+    item = service.save_catalog_item(actor, item_type="MOVIE", title="Gia hạn quá hạn thử")
+    copy = service.add_copy(item.id, "EXTENSION-CUSTOM-001", actor_id=actor)
+    today = date.today()
+    order = service.checkout(customer.id, actor, [CheckoutLine(copy.id, LineAction.RENT, today - timedelta(days=2))],
+                             [PaymentInput(PaymentMethod.CASH, Decimal("500000"))])
+    term = session.query(RentalTerm).filter_by(line_id=order.lines[0].id).one()
+    service.extend_rental(term.id, actor, today + timedelta(days=3), Decimal("17000"), PaymentMethod.BANK_TRANSFER, today)
+    session.flush()
+    assert session.query(RentalExtension).filter_by(rental_term_id=term.id).one().fee == Decimal("17000")
+    assert session.query(PenaltyCharge).filter_by(rental_term_id=term.id, kind="LATE").one().amount == Decimal("10000")
+    assert session.query(PaymentTransaction).filter_by(order_id=order.id, category="EXTENSION_LATE").one().amount == Decimal("10000")
+    service.return_rentals(actor, customer.id, [(term.id, ReturnOutcome.NORMAL, "")], today=today + timedelta(days=3))
+    session.flush()
+    assert session.query(PenaltyCharge).filter_by(rental_term_id=term.id, kind="LATE").count() == 1
+    session.rollback()
+
+
+def test_return_custom_condition_and_status(session):
+    service = _StoreOperations(session)
+    actor = manager_id(session)
+    customer = service.list_customers()[0]
+    item = service.save_catalog_item(actor, item_type="MOVIE", title="Tình trạng khi trả thử")
+    copy = service.add_copy(item.id, "RETURN-CONDITION-001", actor_id=actor)
+    order = service.checkout(customer.id, actor, [CheckoutLine(copy.id, LineAction.RENT, date.today() + timedelta(days=3))],
+                             [PaymentInput(PaymentMethod.CASH, Decimal("500000"))])
+    term = session.query(RentalTerm).filter_by(line_id=order.lines[0].id).one()
+    service.return_rentals(actor, customer.id, [RentalReturnInput(term.id, ReturnOutcome.LIGHT_DAMAGE, "trầy", CopyCondition.WORN, Decimal("55"), CopyStatus.INSPECTION)])
+    assert (copy.condition, copy.condition_percent, copy.status) == (CopyCondition.WORN, Decimal("55"), CopyStatus.INSPECTION)
     session.rollback()
 
 
@@ -1262,7 +1363,7 @@ def test_damaged_returns_reduce_condition_based_price(session):
     session.rollback()
 
 
-def test_season_choices_require_all_episodes_and_allow_selecting_copy(session):
+def test_season_choices_allow_missing_episodes_and_selecting_copy(session):
     service = _StoreOperations(session)
     actor = manager_id(session)
     customer = service.add_customer("Khách chọn tập", "0987643215")
@@ -1273,13 +1374,53 @@ def test_season_choices_require_all_episodes_and_allow_selecting_copy(session):
     result = service.season_checkout_choices(show.id, 1, LineAction.RENT, customer.id, first_episode=2, last_episode=3)
     assert [episode.episode_number for episode, _ in result] == [2, 3]
     assert [choices[0].copy_id for _, choices in result] == [copies[1].id, copies[2].id]
-    with pytest.raises(BusinessError, match="Không có đĩa phù hợp cho các tập: 2"):
-        service.season_checkout_choices(show.id, 1, LineAction.RENT, customer.id, {copies[1].id})
-    with pytest.raises(BusinessError, match="Chưa có các tập: 4"):
-        service.season_checkout_choices(show.id, 1, LineAction.BUY, customer.id, first_episode=2, last_episode=4)
+    partial = service.season_checkout_choices(show.id, 1, LineAction.RENT, customer.id, {copies[1].id})
+    assert [episode.episode_number for episode, choices in partial if not choices] == [2]
+    partial = service.season_checkout_choices(show.id, 1, LineAction.BUY, customer.id, first_episode=2, last_episode=4)
+    assert [episode.episode_number for episode, _ in partial] == [2, 3]
     line = CheckoutLine(copies[0].id, LineAction.RENT, date.today() + timedelta(days=3))
     with pytest.raises(BusinessError, match="không thể xuất hiện nhiều lần"):
         service.quote(customer.id, [line, line])
+    session.rollback()
+
+
+def test_inventory_location_saved_and_filters_nested_groups(session):
+    service = _StoreOperations(session)
+    actor = manager_id(session)
+    show = service.create_show("Bộ kiểm tra vị trí", actor_id=actor)
+    episode = service.add_episodes_bulk(show.id, 1, 1, 1, actor_id=actor)[0]
+    copy = service.add_copy(episode.id, "LOCATION-TEST-001", actor_id=actor,
+                            aisle="A1", rack="K2", compartment="N3")
+    session.flush()
+    location = ("a1", "K2", "N3")
+    rows = service.query_inventory(text="LOCATION-TEST-001", location=location)
+    assert len(rows.items) == 1
+    assert (rows.items[0].aisle, rows.items[0].rack, rows.items[0].compartment) == ("A1", "K2", "N3")
+    assert service.inventory_groups(None, "", None, "", False, False, PageRequest(), location=location).items
+    assert service.inventory_group_episodes(show.id, None, "", None, "", False, False, location=location)[0].item_id == episode.id
+    assert not service.query_inventory(text="LOCATION-TEST-001", location=("A1", "wrong", "")).items
+    choice = service.checkout_copies(episode.id, LineAction.RENT)[0]
+    assert choice.copy_id == copy.id and choice.compartment == "N3"
+    session.rollback()
+
+
+def test_catalog_cover_paths_and_episode_fallback(session):
+    service = _StoreOperations(session)
+    actor = manager_id(session)
+    show = service.create_show("Bộ có ảnh bìa", actor_id=actor)
+    episode = service.add_episodes_bulk(show.id, 1, 1, 1, actor_id=actor)[0]
+    service.set_show_poster(show.id, "https://example.test/show.jpg", actor)
+    session.flush()
+    row = service.query_catalog(CatalogFilters(text=episode.title)).items
+    assert next(item for item in row if item.item_id == episode.id).poster_path == "https://example.test/show.jpg"
+    service.save_catalog_item(actor, id=episode.id, poster_path="C:/posters/episode.png")
+    session.flush()
+    row = service.query_catalog(CatalogFilters(text=episode.title)).items
+    assert next(item for item in row if item.item_id == episode.id).poster_path == "C:/posters/episode.png"
+    service.save_catalog_item(actor, id=episode.id, poster_path=None)
+    session.flush()
+    row = service.query_catalog(CatalogFilters(text=episode.title)).items
+    assert next(item for item in row if item.item_id == episode.id).poster_path == "https://example.test/show.jpg"
     session.rollback()
 
 

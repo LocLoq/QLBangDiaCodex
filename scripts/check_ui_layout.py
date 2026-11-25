@@ -8,8 +8,10 @@ Run while Laragon/MySQL is available:
 from __future__ import annotations
 
 import sys
+import os
 import time
 import tkinter as tk
+from tkinter import ttk
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -24,17 +26,16 @@ from ttkbootstrap.widgets.scrolled import ScrolledFrame  # noqa: E402
 PAGES = (
     ("Tổng quan", "dashboard_page"),
     ("Tạo phiếu", "checkout_page"),
-    ("Phiếu đã lập", "orders_page"),
-    ("Trả đĩa & phạt", "returns_page"),
+    ("Hóa đơn đã tạo", "orders_page"),
+    ("Đĩa đã được thuê", "returns_page"),
     ("Đặt trước", "reservations_page"),
     ("Phim & tập", "catalog_page"),
     ("Kho đĩa", "inventory_page"),
     ("Khách hàng & Premium", "customers_page"),
     ("Combo / Voucher", "promotions_page"),
-    ("Nhân viên", "employees_page"),
     ("Thông báo", "notifications_page"),
     ("Thống kê", "statistics_page"),
-    ("Nhật ký hành động", "audit_page"),
+    ("Lịch sử và hoạt động", "audit_page"),
     ("Cài đặt & Giới thiệu", "settings_page"),
 )
 
@@ -141,8 +142,13 @@ def main() -> int:
     app = NormaStoreApp(service, settings, poster_cache)
     failures: list[str] = []
     try:
+        scaling = os.environ.get("NORMASTORE_UI_SCALING")
+        if scaling:
+            app.tk.call("tk", "scaling", float(scaling))
+            app._apply_ui_style()
         app.state("normal")
-        app.geometry("1366x768+0+0")
+        size = os.environ.get("NORMASTORE_UI_SIZE", "1366x768")
+        app.geometry(f"{size}+0+0")
         app.update()
         content_geometry = (app.content.winfo_rootx(), app.content.winfo_width())
         app._open_drawer(temporary=True)
@@ -152,6 +158,28 @@ def main() -> int:
         if content_geometry != (app.content.winfo_rootx(), app.content.winfo_width()):
             failures.append("drawer làm thay đổi hình học nội dung")
         app._close_drawer()
+        home = next(button for button, glyph in app._nav_icon_widgets if glyph == "\ue80f")
+        if app._hidden_visible or any(button.winfo_ismapped() for button in app._hidden_navigation):
+            failures.append("các mục ẩn hiển thị trước khi nhấn Home")
+        for _ in range(4):
+            home.invoke()
+        if app._hidden_visible:
+            failures.append("các mục ẩn mở trước lần nhấn Home thứ năm")
+        app.show_page("Tạo phiếu", app.checkout_page)
+        home.invoke()
+        if app._hidden_visible:
+            failures.append("chuyển trang không đặt lại chuỗi nhấn Home")
+        for _ in range(3):
+            home.invoke()
+        home.invoke()
+        app.update_idletasks()
+        if not app._hidden_visible or str(app._help_menu.entrycget("Giới thiệu", "state")) != "normal":
+            failures.append("không mở được các mục ẩn sau năm lần nhấn Home")
+        for _ in range(5):
+            home.invoke()
+        app.update_idletasks()
+        if app._hidden_visible or str(app._help_menu.entrycget("Giới thiệu", "state")) != "disabled":
+            failures.append("không ẩn lại các mục sau năm lần nhấn Home")
         for font_scale in ("Vừa", "Lớn"):
             app.font_scale.set(font_scale)
             app._set_font_scale()
@@ -165,6 +193,15 @@ def main() -> int:
                     overflow = _visible_overflow(app, app.content)
                     if overflow:
                         failures.append(f"{font_scale}/{page_name}: " + " | ".join(overflow[:8]))
+                    if page_name == "Tạo phiếu":
+                        panes = [widget for widget in app.pages[page_name].winfo_children()
+                                 if isinstance(widget, ttk.Panedwindow)]
+                        for pane in panes:
+                            for child in pane.panes():
+                                frame = pane.nametowidget(child)
+                                clipped = _visible_overflow(app, frame)
+                                if clipped:
+                                    failures.append(f"{font_scale}/{page_name}/khung: " + " | ".join(clipped[:8]))
                     alignment = _treeview_alignment(app.content)
                     if alignment:
                         failures.append(f"{font_scale}/{page_name}: " + " | ".join(alignment[:8]))
@@ -187,7 +224,7 @@ def main() -> int:
         for failure in failures:
             print(f"- {failure}")
         return 1
-    print("UI_SMOKE_OK: 14 pages, medium/large font, dark mode, 1366x768")
+    print(f"UI_SMOKE_OK: {len(PAGES)} pages, medium/large font, dark mode, {size}")
     return 0
 
 

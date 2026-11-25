@@ -18,7 +18,7 @@
 ## Trả, gia hạn và đặt trước
 
 - Phạt trễ mặc định 5.000 đồng/ngày, theo mức lưu trên dòng thuê. Hư nhẹ/hư nặng/mất lần lượt tính 25%/60%/100% giá trị thay thế; tiền cọc được cấn vào khoản phạt và số dư được ghi vào sổ thanh toán.
-- Trả bình thường đưa đĩa về `AVAILABLE`; hư đưa vào `REPAIR`; mất đưa vào `LOST`. Gia hạn chuẩn 3 ngày; dòng quá hạn hoặc có người chờ cần quản lý phê duyệt.
+- Khi trả, nhân viên chọn hiện trạng, tỷ lệ tình trạng và trạng thái kho cho từng đĩa; báo mất bắt buộc chuyển `LOST`. Gia hạn chọn ngày trả mới và nhập phí thỏa thuận; dòng quá hạn hoặc có người chờ cần quản lý phê duyệt. Khi gia hạn quá hạn, tiền phạt đến ngày gia hạn được thu riêng và không tính lại khi trả đúng hạn mới.
 - Chuyển thuê thành mua cấn cọc đã thu vào giá bán, không tính cọc là giảm giá; chỉ cấn khi phiếu thuê đã thanh toán đủ. Phần cọc vượt giá bán được hoàn. Nếu khách trả thêm chưa đủ, phiếu bán được đánh dấu chưa thanh toán đủ. Khi hoàn phiếu chuyển mua, số hoàn tối đa bằng cọc đã cấn cộng số tiền khách đã trả thêm, không vượt giá bán; phiếu thuê cũ chưa thanh toán đủ cần đối soát thủ công.
 - Hàng bán được xem xét hoàn trong 7 ngày kể cả ngày bán. Hoàn bán đưa đĩa vào `INSPECTION`; đĩa không ở tình trạng tốt cần quản lý, khoản khấu trừ không vượt số tiền hoàn.
 - Đặt trước hỗ trợ phim cho thuê hoặc bán và chờ FIFO theo thời gian tạo. Chỉ bản đĩa có ít nhất một quyền thuê/bán tương ứng với phim được phân bổ. Đĩa mới nhập được phân bổ ngay khi phim đã phát hành; phim sắp ra tiếp tục chờ đến ngày phát hành. Khi chọn đĩa hoặc lập phiếu, hệ thống phân bổ lượt đang chờ trước, kể cả khi tác vụ nền chưa chạy. Hệ thống giữ 24 giờ; hết hạn giải phóng bản đĩa và phân bổ cho người chờ tiếp theo.

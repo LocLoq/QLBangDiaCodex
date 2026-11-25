@@ -54,13 +54,19 @@ class InventoryPageMixin:
         ttk.Combobox(advanced, textvariable=media_filter, values=("Tất cả", "VHS", "VCD", "DVD", "Blu-ray"), state="readonly", width=10).pack(side=LEFT, padx=5)
         ttk.Checkbutton(advanced, text="Cho thuê", variable=rentable_filter).pack(side=LEFT, padx=5)
         ttk.Checkbutton(advanced, text="Cho bán", variable=sellable_filter).pack(side=LEFT, padx=5)
+        location_filters = tuple(tk.StringVar() for _ in range(3))
+        location_bar = ttk.Frame(page)
+        location_bar.pack(fill=X, pady=(0, 6))
+        for label, variable in zip(("Dãy", "Kệ", "Ngăn"), location_filters):
+            ttk.Label(location_bar, text=label).pack(side=LEFT)
+            ttk.Entry(location_bar, textvariable=variable, width=16).pack(side=LEFT, padx=5)
         page_number = tk.IntVar(value=1)
         sort_state: dict[str, object] = {"field": "title", "descending": False}
         tree_frame = ttk.Frame(page)
         tree_frame.pack(fill=BOTH, expand=True)
         tree = self._create_treeview(
             tree_frame,
-            columns=("barcode", "title", "format", "condition", "status", "rent", "sell"),
+            columns=("barcode", "title", "format", "condition", "status", "rent", "sell", "percent", "location"),
             show="tree headings",
         )
         tree.heading("#0", text="Phim / bộ / mùa / đĩa")
@@ -73,6 +79,8 @@ class InventoryPageMixin:
             ("status", "Kho"),
             ("rent", "Thuê"),
             ("sell", "Bán"),
+            ("percent", "Tình trạng %"),
+            ("location", "Dãy / Kệ / Ngăn"),
         ]
         for key, title in titles:
             tree.heading(key, text=title)
@@ -104,7 +112,7 @@ class InventoryPageMixin:
                 return
             current_filters = filters_now()
             if kind == "show":
-                episodes = self.store.inventory_group_episodes(identifier, *current_filters, item_id=navigation["item_id"])
+                episodes = self.store.inventory_group_episodes(identifier, *current_filters, item_id=navigation["item_id"], location=tuple(v.get() for v in location_filters))
                 tree.delete(*children)
                 seasons = {}
                 for episode in episodes:
@@ -119,7 +127,7 @@ class InventoryPageMixin:
                 item_id, copy_page = (identifier, 1) if kind == "item" else identifier
                 parent = node if kind == "item" else tree.parent(node)
                 status, text, condition, media, rentable, sellable = current_filters
-                result = self.store.query_inventory(status, PageRequest(copy_page, 100), SortSpec("barcode"), text, item_id, condition, media, rentable, sellable)
+                result = self.store.query_inventory(status, PageRequest(copy_page, 100), SortSpec("barcode"), text, item_id, condition, media, rentable, sellable, tuple(v.get() for v in location_filters))
                 if kind == "more":
                     tree.delete(node)
                     nodes.pop(node, None)
@@ -128,7 +136,7 @@ class InventoryPageMixin:
                 for copy in result.items:
                     iid = str(copy.copy_id)
                     rows[iid] = copy
-                    tree.insert(parent, END, iid=iid, text=copy.barcode, values=(copy.barcode, copy.title, copy.media_format, CONDITION_LABELS[copy.condition], STATUS_LABELS[copy.status], "Có" if copy.can_rent else "Không", "Có" if copy.can_sell else "Không"))
+                    tree.insert(parent, END, iid=iid, text=copy.barcode, values=(copy.barcode, copy.title, copy.media_format, CONDITION_LABELS[copy.condition], STATUS_LABELS[copy.status], "Có" if copy.can_rent else "Không", "Có" if copy.can_sell else "Không", f"{copy.condition_percent}%", " / ".join(x or "—" for x in (copy.aisle, copy.rack, copy.compartment))))
                 if result.page < result.total_pages:
                     more = tree.insert(parent, END, text="Mở để tải thêm đĩa…")
                     nodes[more] = ("more", (item_id, result.page + 1))
@@ -138,7 +146,7 @@ class InventoryPageMixin:
             tree.delete(*tree.get_children())
             rows.clear()
             nodes.clear()
-            result = self.store.inventory_groups(*filters_now(), PageRequest(page_number.get(), 50), bool(sort_state['descending']), item_id=navigation["item_id"])
+            result = self.store.inventory_groups(*filters_now(), PageRequest(page_number.get(), 50), bool(sort_state['descending']), item_id=navigation["item_id"], location=tuple(v.get() for v in location_filters))
             pager_update(result)
             for group in result.items:
                 kind = "show" if group.is_show else "item"
@@ -175,12 +183,16 @@ class InventoryPageMixin:
             rental_percent = tk.StringVar(value=str(copy.rental_price_percent) if copy.rental_price_percent is not None else "100")
             sale_percent = tk.StringVar(value=str(copy.sale_price_percent) if copy.sale_price_percent is not None else "100")
             note = tk.StringVar()
+            aisle, rack, compartment = (tk.StringVar(value=value or "") for value in (copy.aisle, copy.rack, copy.compartment))
             fields = [
                 ("Mã vạch", barcode, None),
                 ("Định dạng", media, ("VHS", "VCD", "DVD", "Blu-ray")),
                 ("Tình trạng", condition, tuple(CONDITION_LABELS.values())),
                 ("Trạng thái", status, (status.get(),) if copy.status in (CopyStatus.RENTED, CopyStatus.HELD, CopyStatus.SOLD) else tuple(STATUS_LABELS[value] for value in (CopyStatus.AVAILABLE, CopyStatus.INSPECTION, CopyStatus.REPAIR, CopyStatus.LOST, CopyStatus.RETIRED))),
                 ("Tình trạng (%)", condition_percent, None),
+                ("Dãy", aisle, None),
+                ("Kệ", rack, None),
+                ("Ngăn", compartment, None),
                 ("Cách tính giá thuê", rental_mode, tuple(PRICE_MODES)),
                 ("Giá thuê riêng", rental_override, None),
                 ("Tỷ lệ giá thuê (%)", rental_percent, None),
@@ -226,6 +238,7 @@ class InventoryPageMixin:
                         PRICE_MODES[sale_mode.get()],
                         number(rental_percent) if PRICE_MODES[rental_mode.get()] == "PERCENT" else None,
                         number(sale_percent) if PRICE_MODES[sale_mode.get()] == "PERCENT" else None,
+                        aisle.get(), rack.get(), compartment.get(),
                     )
                     self.store.update_inventory_copy(int(selected[0]), request, self.account.employee_id)
                     dialog.destroy()
@@ -260,6 +273,7 @@ class InventoryPageMixin:
             media = tk.StringVar(value="DVD")
             rentable = tk.BooleanVar(value=True)
             sellable = tk.BooleanVar(value=True)
+            location = tuple(tk.StringVar() for _ in range(3))
             form = ttk.Frame(dialog, padding=12)
             form.pack(fill=BOTH, expand=True)
             ttk.Label(form, text="Tìm phim / tập").pack(anchor="w")
@@ -289,6 +303,11 @@ class InventoryPageMixin:
             ttk.Combobox(controls, textvariable=media, values=("VHS", "VCD", "DVD", "Blu-ray"), state="readonly", width=10).pack(side=LEFT, padx=6)
             ttk.Checkbutton(controls, text="Cho thuê", variable=rentable).pack(side=LEFT, padx=6)
             ttk.Checkbutton(controls, text="Cho bán", variable=sellable).pack(side=LEFT, padx=6)
+            location_row = ttk.Frame(form)
+            location_row.pack(fill=X, pady=4)
+            for label, variable in zip(("Dãy", "Kệ", "Ngăn"), location):
+                ttk.Label(location_row, text=label).pack(side=LEFT)
+                ttk.Entry(location_row, textvariable=variable, width=14).pack(side=LEFT, padx=5)
 
             def save():
                 selection = items.selection()
@@ -296,7 +315,7 @@ class InventoryPageMixin:
                     messagebox.showinfo("Thêm đĩa", "Hãy chọn phim hoặc tập phim.", parent=dialog)
                     return
                 try:
-                    self.store.add_copy(int(selection[0]), barcode.get(), media.get(), self.account.employee_id, rentable.get(), sellable.get())
+                    self.store.add_copy(int(selection[0]), barcode.get(), media.get(), self.account.employee_id, rentable.get(), sellable.get(), *(v.get() for v in location))
                     dialog.destroy()
                     refresh()
                 except Exception as exc:
@@ -307,31 +326,21 @@ class InventoryPageMixin:
 
         ttk.Button(filters, text="Lọc", command=refresh, bootstyle="secondary").pack(side=LEFT)
         ttk.Button(filters, text="Thêm đĩa", command=add_copy, state="normal" if self._can_manage() else "disabled").pack(side=LEFT, padx=4)
-        ttk.Button(
-            filters,
-            text="Sửa bản đĩa",
-            command=edit_copy,
-            bootstyle="primary",
-            state="normal" if self._can_manage() else "disabled",
-        ).pack(side=RIGHT, padx=6)
-        ttk.Button(
-            filters,
-            text="Duyệt vào kho",
-            command=lambda: inspect(CopyStatus.AVAILABLE),
-            bootstyle="success",
-        ).pack(side=RIGHT)
-        ttk.Button(
-            filters,
-            text="Chuyển sửa chữa",
-            command=lambda: inspect(CopyStatus.REPAIR),
-            bootstyle="warning",
-        ).pack(side=RIGHT, padx=6)
-        ttk.Button(
-            filters,
-            text="Ngưng khai thác",
-            command=lambda: inspect(CopyStatus.RETIRED),
-            bootstyle="danger",
-        ).pack(side=RIGHT)
+        def copy_menu(event):
+            item = tree.identify_row(event.y)
+            if item not in rows:
+                return
+            tree.selection_set(item)
+            tree.focus(item)
+            menu = tk.Menu(tree, tearoff=False)
+            menu.add_command(label="Sửa bản đĩa", command=edit_copy,
+                             state="normal" if self._can_manage() else "disabled")
+            menu.add_command(label="Duyệt vào kho", command=lambda: inspect(CopyStatus.AVAILABLE))
+            menu.add_command(label="Chuyển sửa chữa", command=lambda: inspect(CopyStatus.REPAIR))
+            menu.add_command(label="Ngưng khai thác", command=lambda: inspect(CopyStatus.RETIRED))
+            menu.tk_popup(event.x_root, event.y_root)
+
+        tree.bind("<Button-3>", copy_menu)
         pager_update = self._create_pager(page, page_number, refresh)
         def change_sort():
             sort_state["descending"] = not sort_state["descending"]
@@ -356,6 +365,8 @@ class InventoryPageMixin:
         for variable in (status_filter, condition_filter, media_filter, rentable_filter, sellable_filter):
             variable.trace_add("write", filter_changed)
         search.trace_add("write", search_changed)
+        for variable in location_filters:
+            variable.trace_add("write", search_changed)
 
         def show_item(item_id, title, show_id):
             pending = search_timer.pop("after", None)
@@ -370,6 +381,8 @@ class InventoryPageMixin:
                 rentable_filter.set(False)
                 sellable_filter.set(False)
                 search.set(title)
+                for variable in location_filters:
+                    variable.set("")
                 page_number.set(1)
             finally:
                 navigation["suppress"] = False

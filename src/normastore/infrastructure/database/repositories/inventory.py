@@ -28,7 +28,7 @@ class InventoryQueries:
     def __init__(self, session):
         self.session = session
 
-    def _conditions(self, status, text, condition, media, rentable, sellable):
+    def _conditions(self, status, text, condition, media, rentable, sellable, location=("", "", "")):
         conditions = [CatalogItem.archived.is_(False)]
         if status:
             conditions.append(PhysicalCopy.status == status)
@@ -40,19 +40,22 @@ class InventoryQueries:
             conditions.extend([CatalogItem.can_rent.is_(True), PhysicalCopy.can_rent.is_(True)])
         if sellable:
             conditions.extend([CatalogItem.can_sell.is_(True), PhysicalCopy.can_sell.is_(True)])
+        for column, value in zip((PhysicalCopy.aisle, PhysicalCopy.rack, PhysicalCopy.compartment), location):
+            if value.strip():
+                conditions.append(column.ilike(f"%{value.strip()}%"))
         if text.strip():
             term = f"%{text.strip()}%"
             conditions.append(or_(CatalogItem.title.ilike(term), Show.title.ilike(term), PhysicalCopy.barcode.ilike(term)))
         return conditions
 
-    def query_groups(self, status, text, condition, media, rentable, sellable, page_request, descending=False, item_id=None):
+    def query_groups(self, status, text, condition, media, rentable, sellable, page_request, descending=False, item_id=None, location=("", "", "")):
         is_show = case((CatalogItem.show_id.is_not(None), 1), else_=0)
         group_id = case((CatalogItem.show_id.is_not(None), CatalogItem.show_id), else_=CatalogItem.id)
         title = case((CatalogItem.show_id.is_not(None), Show.title), else_=CatalogItem.title)
         statement = (select(is_show.label("is_show"), group_id.label("group_id"), title.label("title"))
                      .select_from(CatalogItem).outerjoin(Show, Show.id == CatalogItem.show_id)
                      .outerjoin(PhysicalCopy, PhysicalCopy.item_id == CatalogItem.id)
-                     .where(*self._conditions(status, text, condition, media, rentable, sellable))
+                     .where(*self._conditions(status, text, condition, media, rentable, sellable, location))
                      .group_by(is_show, group_id, title)
                      .order_by(title.desc() if descending else title.asc(), is_show, group_id))
         if item_id is not None:
@@ -60,12 +63,12 @@ class InventoryQueries:
         page = page_rows(self.session, statement, page_request)
         return PagedResult(tuple(InventoryGroup(int(group_id), title, bool(is_show)) for is_show, group_id, title in page.items), page.page, page.page_size, page.total_items, page.total_pages)
 
-    def group_episodes(self, show_id, status, text, condition, media, rentable, sellable, item_id=None):
+    def group_episodes(self, show_id, status, text, condition, media, rentable, sellable, item_id=None, location=("", "", "")):
         statement = (select(CatalogItem.id, CatalogItem.title, Season.season_number, CatalogItem.episode_number)
                      .join(Show, Show.id == CatalogItem.show_id)
                      .join(Season, Season.id == CatalogItem.season_id)
                      .outerjoin(PhysicalCopy, PhysicalCopy.item_id == CatalogItem.id)
-                     .where(CatalogItem.show_id == show_id, *self._conditions(status, text, condition, media, rentable, sellable))
+                     .where(CatalogItem.show_id == show_id, *self._conditions(status, text, condition, media, rentable, sellable, location))
                      .distinct().order_by(Season.season_number, CatalogItem.episode_number, CatalogItem.id))
         if item_id is not None:
             statement = statement.where(CatalogItem.id == item_id)
@@ -82,10 +85,11 @@ class InventoryQueries:
         media: str = "",
         rentable: bool = False,
         sellable: bool = False,
+        location: tuple[str, str, str] = ("", "", ""),
     ) -> PagedResult[InventoryCopy]:
         stmt = (select(PhysicalCopy, CatalogItem).join(CatalogItem)
                 .outerjoin(Show, Show.id == CatalogItem.show_id)
-                .where(*self._conditions(status, text, condition, media, rentable, sellable)))
+                .where(*self._conditions(status, text, condition, media, rentable, sellable, location)))
         if item_id is not None:
             stmt = stmt.where(CatalogItem.id == item_id)
         fields = {
@@ -121,6 +125,9 @@ class InventoryQueries:
                     copy.sale_price_mode,
                     copy.rental_price_percent,
                     copy.sale_price_percent,
+                    copy.aisle,
+                    copy.rack,
+                    copy.compartment,
                 )
                 for copy, item in page.items
             ),

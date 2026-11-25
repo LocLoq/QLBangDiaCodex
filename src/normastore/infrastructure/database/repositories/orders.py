@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import joinedload
@@ -40,7 +40,7 @@ class OrderQueries:
         self.session = session
 
     def query_active_rentals(
-        self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("due", False)
+        self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("due", False), customer_name: str = ""
     ) -> PagedResult[ActiveRental]:
         stmt = (
             select(RentalTerm, OrderLine, Order, Customer, PhysicalCopy)
@@ -49,7 +49,10 @@ class OrderQueries:
             .join(Customer, Order.customer_id == Customer.id)
             .join(PhysicalCopy, OrderLine.copy_id == PhysicalCopy.id)
             .where(RentalTerm.state == RentalState.ACTIVE)
+            .options(joinedload(PhysicalCopy.item))
         )
+        if customer_name.strip():
+            stmt = stmt.where(Customer.full_name.ilike(f"%{customer_name.strip()}%"))
         fields = {
             "title": OrderLine.title_snapshot,
             "customer": Customer.full_name,
@@ -62,6 +65,7 @@ class OrderQueries:
             stmt.order_by(desc(expression) if sort.descending else expression.asc(), RentalTerm.id),
             page_request,
         )
+        balances, deposits = self.rental_order_amounts(row[2] for row in page.items)
         return PagedResult(
             tuple(
                 ActiveRental(
@@ -71,14 +75,68 @@ class OrderQueries:
                     line.title_snapshot,
                     copy.barcode,
                     term.due_date,
+                    term.late_daily_rate,
+                    copy.condition,
+                    copy.condition_percent,
+                    copy.aisle,
+                    copy.rack,
+                    copy.compartment,
+                    deposit_amount=Decimal(line.deposit_amount),
+                    replacement_value=Decimal(copy.item.replacement_value),
+                    deposit_paid=deposits[line.id],
+                    order_code=order.code,
+                    order_balance_due=balances[order.id],
                 )
-                for term, line, _order, customer, copy in page.items
+                for term, line, order, customer, copy in page.items
             ),
             page.page,
             page.page_size,
             page.total_items,
             page.total_pages,
         )
+
+    def rental_order_amounts(self, orders):
+        orders_by_id = {order.id: order for order in orders}
+        if not orders_by_id:
+            return {}, {}
+        paid_by_order = dict(self.session.execute(
+            select(PaymentTransaction.order_id, func.sum(PaymentTransaction.amount))
+            .where(PaymentTransaction.order_id.in_(orders_by_id),
+                   PaymentTransaction.category == "CHECKOUT")
+            .group_by(PaymentTransaction.order_id)
+        ).all())
+        zero = Decimal("0")
+        balances = {}
+        paid_deposits = {}
+        for order in orders_by_id.values():
+            total_due = order.gross_total - order.discount_total + order.deposit_total
+            # Confirmed legacy and demo orders may have no checkout transaction.
+            fallback = total_due if order.status == "CONFIRMED" else zero
+            paid = max(zero, paid_by_order.get(order.id, fallback))
+            balances[order.id] = max(zero, total_due - paid)
+            paid_deposits[order.id] = min(order.deposit_total, paid)
+
+        deposits = {}
+        cumulative_due = dict.fromkeys(orders_by_id, zero)
+        cumulative_paid = dict.fromkeys(orders_by_id, zero)
+        for order_id, line_id, amount in self.session.execute(
+            select(OrderLine.order_id, OrderLine.id, OrderLine.deposit_amount)
+            .where(OrderLine.order_id.in_(orders_by_id), OrderLine.action == LineAction.RENT)
+            .order_by(OrderLine.order_id, OrderLine.id)
+        ):
+            deposit_total = orders_by_id[order_id].deposit_total
+            paid = paid_deposits[order_id]
+            if paid == deposit_total:
+                deposits[line_id] = amount
+                continue
+            # Round cumulative shares so returning lines in any order preserves the total.
+            cumulative_due[order_id] += amount
+            share = (cumulative_due[order_id] * paid / deposit_total).quantize(
+                Decimal("0.01"), rounding=ROUND_DOWN
+            )
+            deposits[line_id] = share - cumulative_paid[order_id]
+            cumulative_paid[order_id] = share
+        return balances, deposits
 
     def query_orders(
         self,

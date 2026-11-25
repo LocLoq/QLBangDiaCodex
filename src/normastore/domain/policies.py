@@ -42,7 +42,16 @@ def late_fee(due_date: date, today: date, daily_rate: Decimal = Decimal("5000"))
     return money(late_days(due_date, today) * daily_rate)
 
 
-def damage_fee(replacement_value: Decimal, outcome: ReturnOutcome) -> Decimal:
+def damage_fee(
+    replacement_value: Decimal, outcome: ReturnOutcome, override: Decimal | None = None
+) -> Decimal:
+    if override is not None:
+        if outcome not in (ReturnOutcome.LIGHT_DAMAGE, ReturnOutcome.HEAVY_DAMAGE):
+            raise ValueError("Chỉ được nhập tiền phạt hư đĩa khi chọn Hư nhẹ hoặc Hư nặng.")
+        if (not override.is_finite() or not 0 <= override < Decimal("1000000000000")
+                or override != override.to_integral_value()):
+            raise ValueError("Tiền phạt hư đĩa phải là số nguyên không âm và dưới 1.000 tỷ đồng.")
+        return money(override)
     rate = {
         ReturnOutcome.NORMAL: Decimal("0"),
         ReturnOutcome.LIGHT_DAMAGE: Decimal("0.25"),

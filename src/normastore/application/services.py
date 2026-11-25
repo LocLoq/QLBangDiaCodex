@@ -41,6 +41,7 @@ from normastore.application.contracts import (
     PaymentInput,
     Quote,
     RecordView,
+    RentalReturnInput,
     ReservationView,
     ReturnableSale,
     ShowEpisodeSummary,
@@ -112,6 +113,7 @@ def _snapshot(value):
             value.rental_price_percent,
             value.sale_price_percent,
             value.show_id,
+            value.poster_path,
         )
     if isinstance(value, Order):
         return OrderView(
@@ -154,7 +156,7 @@ class StoreService:
     _MUTATIONS = frozenset({
         "change_password", "create_employee_account", "add_customer", "activate_premium",
         "create_voucher", "create_fixed_combo", "create_show_episode_combo", "save_catalog_item",
-        "create_show", "add_episodes_bulk", "add_copy", "save_deposit_percent",
+        "create_show", "set_show_poster", "add_episodes_bulk", "add_copy", "save_deposit_percent",
         "update_inventory_copy",
         "archive_items", "bulk_update_catalog_prices", "checkout", "return_rentals",
         "extend_rental", "rental_to_sale", "return_sale", "inspect_copy", "reserve",
@@ -453,6 +455,9 @@ class StoreService:
     ) -> RecordView:
         return self._execute("create_show", title, overview, actor_id)
 
+    def set_show_poster(self, show_id: int, poster_path: str | None, actor_id: int) -> RecordView:
+        return self._execute("set_show_poster", show_id, poster_path, actor_id)
+
     def add_episodes_bulk(
         self,
         show_id: int,
@@ -480,9 +485,12 @@ class StoreService:
         actor_id: int | None = None,
         can_rent: bool | None = None,
         can_sell: bool | None = None,
+        aisle: str = "",
+        rack: str = "",
+        compartment: str = "",
     ) -> RecordView:
         return self._execute(
-            "add_copy", item_id, barcode, media_format, actor_id, can_rent, can_sell
+            "add_copy", item_id, barcode, media_format, actor_id, can_rent, can_sell, aisle, rack, compartment
         )
 
     def deposit_percent(self) -> Decimal:
@@ -555,9 +563,9 @@ class StoreService:
         )
 
     def query_active_rentals(
-        self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("due", False)
+        self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("due", False), customer_name: str = ""
     ) -> PagedResult[ActiveRental]:
-        return self._execute("query_active_rentals", page_request, sort)
+        return self._execute("query_active_rentals", page_request, sort, customer_name)
 
     def active_rentals(self) -> list[ActiveRental]:
         return self._execute("active_rentals")
@@ -588,14 +596,16 @@ class StoreService:
         self,
         employee_id: int,
         customer_id: int,
-        returns: list[tuple[int, ReturnOutcome, str]],
+        returns: list[RentalReturnInput | tuple[int, ReturnOutcome, str]],
         payment: PaymentInput | None = None,
         today: date | None = None,
     ) -> Decimal:
         return self._execute("return_rentals", employee_id, customer_id, returns, payment, today)
 
-    def extend_rental(self, rental_term_id: int, employee_id: int, days: int = 3) -> RecordView:
-        return self._execute("extend_rental", rental_term_id, employee_id, days)
+    def extend_rental(self, rental_term_id: int, employee_id: int, new_due_date: date | None = None,
+                      fee: Decimal | None = None, method: PaymentMethod = PaymentMethod.CASH,
+                      today: date | None = None) -> RecordView:
+        return self._execute("extend_rental", rental_term_id, employee_id, new_due_date, fee, method, today)
 
     def rental_to_sale(
         self, rental_term_id: int, employee_id: int, payment: PaymentInput
@@ -629,14 +639,15 @@ class StoreService:
         media: str = "",
         rentable: bool = False,
         sellable: bool = False,
+        location: tuple[str, str, str] = ("", "", ""),
     ) -> PagedResult[InventoryCopy]:
-        return self._execute("query_inventory", status, page_request, sort, text, item_id, condition, media, rentable, sellable)
+        return self._execute("query_inventory", status, page_request, sort, text, item_id, condition, media, rentable, sellable, location)
 
-    def inventory_groups(self, status, text, condition, media, rentable, sellable, page_request, descending=False, item_id=None):
-        return self._execute("inventory_groups", status, text, condition, media, rentable, sellable, page_request, descending, item_id)
+    def inventory_groups(self, status, text, condition, media, rentable, sellable, page_request, descending=False, item_id=None, location=("", "", "")):
+        return self._execute("inventory_groups", status, text, condition, media, rentable, sellable, page_request, descending, item_id, location)
 
-    def inventory_group_episodes(self, show_id, status, text, condition, media, rentable, sellable, item_id=None):
-        return self._execute("inventory_group_episodes", show_id, status, text, condition, media, rentable, sellable, item_id)
+    def inventory_group_episodes(self, show_id, status, text, condition, media, rentable, sellable, item_id=None, location=("", "", "")):
+        return self._execute("inventory_group_episodes", show_id, status, text, condition, media, rentable, sellable, item_id, location)
 
     def list_inventory(
         self, status: CopyStatus | None = None, limit: int = 500

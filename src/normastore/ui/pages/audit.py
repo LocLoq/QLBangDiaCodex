@@ -36,7 +36,7 @@ ENTITY_LABELS = {
 
 class AuditPageMixin:
     def audit_page(self, page) -> None:
-        self._heading(page, "Nhật ký hành động", "Thay đổi nghiệp vụ và sự kiện bảo mật")
+        self._heading(page, "Lịch sử và hoạt động", "Thay đổi nghiệp vụ và sự kiện bảo mật")
         filters = ttk.Frame(page)
         filters.pack(fill=X, pady=(0, 8))
         text, action = tk.StringVar(), tk.StringVar(value="Tất cả")

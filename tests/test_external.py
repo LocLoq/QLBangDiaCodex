@@ -3,7 +3,24 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 
-from normastore.infrastructure.external import GeminiSearch, TmdbClient
+from normastore.infrastructure.external import GeminiSearch, PosterCache, TmdbClient
+
+
+def test_poster_cache_accepts_local_paths_and_absolute_urls(tmp_path, monkeypatch):
+    source = tmp_path / "cover.png"
+    source.write_bytes(b"image bytes")
+    cache = PosterCache(tmp_path / "cache")
+    assert cache.fetch(str(source)) == source
+    seen = []
+    class Response:
+        content = b"remote image"
+        def raise_for_status(self):
+            pass
+    monkeypatch.setattr("normastore.infrastructure.external.httpx.get", lambda url, **kwargs: (seen.append(url), Response())[1])
+    assert cache.fetch("https://example.test/cover.png").read_bytes() == b"remote image"
+    assert seen == ["https://example.test/cover.png"]
+    cache.fetch("/tmdb-cover.jpg")
+    assert seen[-1] == "https://image.tmdb.org/t/p/w342/tmdb-cover.jpg"
 
 
 class FakeResponse:

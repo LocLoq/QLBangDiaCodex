@@ -16,16 +16,20 @@ from decimal import Decimal
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+from PIL import Image
 from sqlalchemy.engine import make_url
 from ttkbootstrap import DateEntry
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from normastore.bootstrap import bootstrap, build_application
-from normastore.application.contracts import CheckoutLine
+from normastore.application.contracts import CheckoutLine, PaymentInput
 from normastore.config import Settings
 from normastore.domain.enums import CopyStatus, LineAction, PaymentMethod
 from normastore.ui.app import NormaStoreApp
+from normastore.ui.formatting import vnd
+import normastore.ui.media as ui_media
+from check_ui_layout import _visible_overflow
 
 
 def widgets(root):
@@ -92,6 +96,14 @@ def main():
             time.sleep(0.02)
 
     try:
+        scaling = os.environ.get("NORMASTORE_UI_SCALING")
+        if scaling:
+            app.tk.call("tk", "scaling", float(scaling))
+        font_scale = os.environ.get("NORMASTORE_UI_FONT")
+        if font_scale:
+            app.font_scale.set(font_scale)
+        if scaling or font_scale:
+            app._apply_ui_style()
         app.state("normal")
         app.geometry("1366x768+0+0")
         app.show_page("Kho đĩa", app.inventory_page)
@@ -116,8 +128,19 @@ def main():
         print("INVENTORY_SEARCH_AND_DRAWER_OK", flush=True)
 
         copy_node = next(i for i in tree.get_children(episode_node) if tree.item(i, "text") == "UI-EP-2-B")
+        tree.item(root, open=True)
+        tree.item(tree.parent(episode_node), open=True)
+        tree.item(episode_node, open=True)
+        pump()
         tree.selection_set(copy_node)
-        button(page, "Sửa bản đĩa").invoke()
+        x, y, _width, height = tree.bbox(copy_node)
+        original_popup = tk.Menu.tk_popup
+        tk.Menu.tk_popup = lambda menu, *_args: menu.invoke("Sửa bản đĩa")
+        try:
+            tree.event_generate("<Button-3>", x=x + 4, y=y + height // 2)
+        finally:
+            tk.Menu.tk_popup = original_popup
+        pump()
         pump()
         edit_dialog = next(w for w in app.winfo_children() if isinstance(w, tk.Toplevel) and w.title() == "Sửa bản đĩa")
 
@@ -196,7 +219,49 @@ def main():
         movie_percent = next(w for w in rent_row.winfo_children() if w.winfo_class() == "TEntry")
         movie_percent.delete(0, tk.END)
         movie_percent.insert(0, "50")
-        button(movie_dialog, "Lưu").invoke()
+        with tempfile.TemporaryDirectory(prefix="normastore-cover-") as image_dir:
+            cover = Path(image_dir) / "cover.png"
+            Image.new("RGB", (50, 75), "blue").save(cover)
+            filedialog.askopenfilename = lambda **_kwargs: str(cover)
+            original_data_dir = ui_media.user_data_dir
+            ui_media.user_data_dir = lambda _name: image_dir
+            button(movie_dialog, "Chọn ảnh cục bộ").invoke()
+            cover_box = next(w for w in widgets(movie_dialog) if isinstance(w, ttk.Labelframe) and w.cget("text") == "Ảnh bìa")
+            assert next(w for w in cover_box.winfo_children() if isinstance(w, ttk.Entry)).get() == str(cover)
+            try:
+                button(movie_dialog, "Lưu").invoke()
+                assert not movie_dialog.winfo_exists(), f"Không lưu được ảnh: {callback_errors}"
+                demo_item = next(item for item in service.query_catalog().items if item.title == "Mẫu phim khởi động")
+                saved_cover = service.catalog_item(demo_item.item_id).poster_path
+                assert Path(saved_cover).is_file()
+                editor = app._dialog("Kiểm tra ảnh bìa", 500, 260)
+                holder = ttk.Frame(editor)
+                holder.pack(fill="both", expand=True)
+                prepare = app._poster_editor(holder, saved_cover)
+                poster_entry = next(w for w in widgets(holder) if isinstance(w, ttk.Entry))
+                original_fetch = app.poster_cache.fetch
+                app.poster_cache.fetch = lambda _url: cover
+                poster_entry.delete(0, tk.END)
+                poster_entry.insert(0, "https://example.test/cover.png")
+                assert prepare() == "https://example.test/cover.png"
+                service.save_catalog_item(actor, id=demo_item.item_id, poster_path=prepare())
+                assert service.catalog_item(demo_item.item_id).poster_path == "https://example.test/cover.png"
+                def failed_fetch(_url):
+                    raise OSError("không tải được")
+                app.poster_cache.fetch = failed_fetch
+                poster_entry.delete(0, tk.END)
+                poster_entry.insert(0, "https://example.test/broken.png")
+                try:
+                    prepare()
+                    raise AssertionError("Liên kết ảnh lỗi không bị từ chối")
+                except ValueError:
+                    assert service.catalog_item(demo_item.item_id).poster_path == "https://example.test/cover.png"
+                finally:
+                    service.save_catalog_item(actor, id=demo_item.item_id, poster_path=saved_cover)
+                    app.poster_cache.fetch = original_fetch
+                    editor.destroy()
+            finally:
+                ui_media.user_data_dir = original_data_dir
         pump(1.5)
         demo_copy = next(row for row in service.query_inventory(text="DVD-DEMO-001").items if row.barcode == "DVD-DEMO-001")
         demo_item = next(item for item in service.query_catalog().items if item.title == "Mẫu phim khởi động")
@@ -222,13 +287,15 @@ def main():
         button(page, "Chọn phim bộ").invoke()
         pump()
         dialog = next(w for w in app.winfo_children() if isinstance(w, tk.Toplevel) and w.title() == "Chọn tập phim bộ")
+        assert not _visible_overflow(app, dialog), "Cửa sổ chọn tập bị tràn nội dung."
         controls = next(w for w in widgets(dialog) if isinstance(w, ttk.Frame) and
                         any(isinstance(c, ttk.Label) and c.cget("text") == "Từ tập" for c in w.winfo_children()))
         entries = [w for w in controls.winfo_children() if w.winfo_class() == "TEntry"]
         entries[0].insert(0, "2")
-        entries[1].insert(0, "3")
+        entries[1].insert(0, "4")
         button(dialog, "Chọn thuê").invoke()
         pump()
+        assert any(isinstance(w, ttk.Label) and "Tập 4: Chưa nhập" in str(w.cget("text")) for w in widgets(dialog))
         choices = [w for w in widgets(dialog) if isinstance(w, ttk.Combobox) and
                    any("UI-EP-2-B" in str(value) for value in w.cget("values"))]
         assert len(choices) == 1, "Không có lựa chọn đĩa cho tập 2."
@@ -275,18 +342,42 @@ def main():
         assert service.query_inventory(text="UI-EP-3-B").items[0].status == CopyStatus.SOLD
         print("CHECKOUT_PAYMENT_AND_ORDER_OK", flush=True)
 
-        app.show_page("Trả đĩa & phạt", app.returns_page)
+        app.show_page("Đĩa đã được thuê", app.returns_page)
         pump()
-        returns_page = app.pages["Trả đĩa & phạt"]
+        returns_page = app.pages["Đĩa đã được thuê"]
         returns_tree = next(w for w in widgets(returns_page) if isinstance(w, ttk.Treeview))
         rental = next(row for row in service.active_rentals() if row.barcode == "UI-EP-2-B")
         returns_tree.selection_set(str(rental.term_id))
-        outcome_picker = next(w for w in widgets(returns_page) if isinstance(w, ttk.Combobox) and
+        button(returns_page, "Trả đĩa").invoke()
+        pump()
+        return_dialog = next(w for w in app.winfo_children() if isinstance(w, tk.Toplevel) and w.title() == "Trả đĩa")
+        assert not _visible_overflow(app, return_dialog), "Cửa sổ trả đĩa bị tràn nội dung."
+        outcome_picker = next(w for w in widgets(return_dialog) if isinstance(w, ttk.Combobox) and
                               "Hư nhẹ" in w.cget("values"))
         outcome_picker.set("Hư nhẹ")
-        button(returns_page, "Xác nhận trả").invoke()
+        condition_picker = next(w for w in widgets(return_dialog) if isinstance(w, ttk.Combobox) and "Cũ" in w.cget("values"))
+        condition_picker.set("Cũ")
+        percent_label = next(w for w in widgets(return_dialog) if isinstance(w, ttk.Label) and w.cget("text") == "Tình trạng %")
+        percent_entry = next(w for w in percent_label.master.winfo_children() if isinstance(w, ttk.Entry))
+        percent_entry.delete(0, tk.END)
+        percent_entry.insert(0, "55")
+        button(return_dialog, "Trả đĩa").invoke()
         pump()
-        assert service.query_inventory(text="UI-EP-2-B").items[0].status == CopyStatus.REPAIR
+        returned_copy = service.query_inventory(text="UI-EP-2-B").items[0]
+        assert returned_copy.status == CopyStatus.REPAIR and returned_copy.condition_percent == Decimal("55")
+        other_rental = next(row for row in service.active_rentals() if row.barcode == "UI-EP-3-A")
+        returns_tree.selection_set(str(other_rental.term_id))
+        button(returns_page, "Gia hạn…").invoke()
+        pump()
+        extension_dialog = next(w for w in app.winfo_children() if isinstance(w, tk.Toplevel) and w.title() == "Gia hạn thuê")
+        assert not _visible_overflow(app, extension_dialog), "Cửa sổ gia hạn bị tràn nội dung."
+        fee_label = next(w for w in widgets(extension_dialog) if isinstance(w, ttk.Label) and w.cget("text") == "Phí gia hạn thỏa thuận:")
+        fee_entry = next(w for w in fee_label.master.winfo_children() if isinstance(w, ttk.Entry))
+        fee_entry.insert(0, "17000")
+        messagebox.askyesno = lambda *_args, **_kwargs: True
+        button(extension_dialog, "Xác nhận gia hạn").invoke()
+        pump()
+        assert next(row for row in service.active_rentals() if row.term_id == other_rental.term_id).due_date == other_rental.due_date + timedelta(days=3)
         button(returns_page, "Trả hàng bán").invoke()
         pump()
         sale_dialog = next(w for w in app.winfo_children() if isinstance(w, tk.Toplevel) and w.title() == "Trả hàng bán trong 7 ngày")
@@ -300,6 +391,51 @@ def main():
         assert not sale_tree.exists(str(sale_line.line_id))
         sale_dialog.destroy()
         print("RENTAL_AND_SALE_RETURN_OK", flush=True)
+
+        partial_copies = [
+            service.add_copy(episodes[1].id, f"UI-PARTIAL-RETURN-{number}", actor_id=actor)
+            for number in (1, 2)
+        ]
+        partial_lines = [CheckoutLine(copy.id, LineAction.RENT, date.today()) for copy in partial_copies]
+        partial_order = service.checkout(
+            customer.id, actor, partial_lines, [PaymentInput(PaymentMethod.CASH, Decimal("10000"))],
+        )
+        partial_receipt = service.order_receipt(partial_order.id)
+        partial_rentals = [row for row in service.active_rentals() if row.order_code == partial_order.code]
+        returns_page.refresh()
+        returns_tree.selection_set(tuple(str(row.term_id) for row in partial_rentals))
+        button(returns_page, "Trả đĩa").invoke()
+        pump()
+        partial_dialog = next(w for w in app.winfo_children()
+                              if isinstance(w, tk.Toplevel) and w.title() == "Trả đĩa")
+        unpaid_label = f"{partial_order.code}: {vnd(partial_receipt.balance_due)}"
+        assert sum(isinstance(w, ttk.Label) and w.cget("text") == unpaid_label
+                   for w in widgets(partial_dialog)) == 1
+        assert any(isinstance(w, ttk.Label) and "Cọc đã thu: 10.000 đ" in w.cget("text")
+                   for w in widgets(partial_dialog))
+        assert partial_receipt.balance_due == partial_rentals[0].order_balance_due > 0
+        outcome = next(w for w in widgets(partial_dialog) if isinstance(w, ttk.Combobox)
+                       and "Hư nhẹ" in w.cget("values"))
+        outcome.set("Hư nhẹ")
+
+        def return_field(text):
+            label = next(w for w in widgets(partial_dialog)
+                         if isinstance(w, ttk.Label) and w.cget("text") == text)
+            return next(w for w in label.master.winfo_children() if isinstance(w, ttk.Entry))
+
+        damage_entry = return_field("Tiền phạt hư đĩa (đ):")
+        damage_entry.insert(0, "20000")
+        received_entry = return_field("Thu thêm sau cấn cọc:")
+        assert Decimal(received_entry.get()) == Decimal("10000")
+        received_entry.delete(0, tk.END)
+        received_entry.insert(0, "4000")
+        assert any(isinstance(w, ttk.Label) and w.cget("text") == "Còn thiếu tiền phạt: 6.000 đ"
+                   for w in widgets(partial_dialog))
+        button(partial_dialog, "Trả đĩa").invoke()
+        assert not partial_dialog.winfo_exists()
+        assert ("Trả đĩa", "Hoàn khách: 0 đ\nĐã thu thêm: 4.000 đ\nCòn thiếu tiền phạt: 6.000 đ") in confirmations
+        print("PARTIAL_RENTAL_RETURN_OK", flush=True)
+
         app.show_page("Thống kê", app.statistics_page)
         pump(3)
         page = app.pages["Thống kê"]
@@ -407,6 +543,30 @@ def main():
         pump()
         assert any(row.item_title == "Phim sắp ra thử" and row.customer_name == "Khách thử giao diện"
                    for row in service.list_reservations())
+        service.reserve(customer.id, [episodes[0].id], actor)
+        app.show_page("Đặt trước", app.reservations_page)
+        pump()
+        reservation_tree = next(w for w in widgets(app.pages["Đặt trước"]) if isinstance(w, ttk.Treeview))
+        reserved_episode = next(row for row in service.list_reservations() if row.item_id == episodes[0].id)
+        reservation_row = next(i for i in reservation_tree.get_children()
+                               if reservation_tree.item(i, "values")[1] == reserved_episode.item_title)
+        reservation_tree.see(reservation_row)
+        pump()
+        x, y, _width, height = reservation_tree.bbox(reservation_row)
+        labels = []
+        original_popup = tk.Menu.tk_popup
+        def invoke_detail(menu, *_args):
+            labels.extend(menu.entrycget(i, "label") for i in range(menu.index("end") + 1))
+            menu.invoke("Xem chi tiết phim / tập")
+        tk.Menu.tk_popup = invoke_detail
+        try:
+            reservation_tree.event_generate("<Button-3>", x=x + 4, y=y + height // 2)
+        finally:
+            tk.Menu.tk_popup = original_popup
+        pump()
+        assert "Xem chi tiết bộ phim" in labels
+        details = next(w for w in app.winfo_children() if isinstance(w, tk.Toplevel) and w.title() == "Chi tiết phim / tập")
+        details.destroy()
         assert not background_variables, f"Biến giao diện bị giải phóng ở luồng nền: {background_variables}"
         assert not callback_errors, f"Lỗi callback giao diện: {callback_errors}"
         print("DASHBOARD_STOCK_DISCOVERY_RANDOM_PREORDER_OK", flush=True)

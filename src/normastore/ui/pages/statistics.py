@@ -56,9 +56,8 @@ class StatisticsPageMixin:
         genre_control.pack(side=LEFT, padx=6)
         ttk.Label(page, text="Biểu đồ phim theo bộ lọc; chỉ số cửa hàng theo kỳ, tồn kho là trạng thái hiện tại.", bootstyle="secondary").pack(anchor="w")
         stats = tk.StringVar()
-        ttk.Label(page, textvariable=stats, font=("Segoe UI", 13), justify=LEFT).pack(
-            anchor="w", pady=15
-        )
+        stats_label = ttk.Label(page, textvariable=stats, font=("Segoe UI", 13), justify=LEFT)
+        stats_label.pack(anchor="w", pady=15)
         tables = ttk.PanedWindow(page, orient="horizontal")
         tables.pack(fill=BOTH, expand=True)
         top_frame = ttk.Frame(tables, padding=4)
@@ -140,6 +139,13 @@ class StatisticsPageMixin:
         genre_axis = analysis_figure.add_subplot(324)
         analysis_chart = FigureCanvasTkAgg(analysis_figure, master=analysis_frame)
         analysis_chart.get_tk_widget().pack(fill=X)
+        chart_frame.pack_configure(before=stats_label)
+        analysis_frame.pack_configure(before=stats_label)
+        for table in (top_tree, sale_tree, combo_tree, voucher_tree, overdue_tree, stockout_tree):
+            def scroll_table(event, widget=table):
+                widget.yview_scroll(-int(event.delta / 120), "units")
+                return "break"
+            table.bind("<MouseWheel>", scroll_table)
         inventory_statuses = (
             CopyStatus.AVAILABLE,
             CopyStatus.RENTED,
@@ -158,11 +164,13 @@ class StatisticsPageMixin:
             label = ttk.Label(dialog, text="", font=self._font("section"))
             label.pack(anchor="w", padx=12, pady=(12, 6))
             tree = self._create_treeview(
-                dialog, columns=("format", "condition", "rent", "buy"), show="tree headings"
+                dialog, columns=("format", "condition", "percent", "location", "rent", "buy"), show="tree headings"
             )
             tree.heading("#0", text="Mã vạch / phim")
             tree.heading("format", text="Định dạng")
             tree.heading("condition", text="Hiện trạng")
+            tree.heading("percent", text="Tình trạng (%)")
+            tree.heading("location", text="Dãy / Kệ / Ngăn")
             tree.heading("rent", text="Cho thuê")
             tree.heading("buy", text="Cho mua")
             tree.column("#0", width=360)
@@ -187,6 +195,8 @@ class StatisticsPageMixin:
                         values=(
                             copy.media_format,
                             CONDITION_LABELS[copy.condition],
+                            f"{copy.condition_percent}%",
+                            " / ".join(value or "—" for value in (copy.aisle, copy.rack, copy.compartment)),
                             "Có" if copy.can_rent else "Không",
                             "Có" if copy.can_sell else "Không",
                         ),

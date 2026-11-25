@@ -281,7 +281,7 @@ class CatalogQueries:
                     overview=item.overview,
                     release_date=item.release_date,
                     vote_average=item.vote_average,
-                    poster_path=item.poster_path,
+                    poster_path=item.poster_path or (item.show.poster_path if item.show else None),
                     rental_price=Decimal(item.rental_price),
                     sale_price=Decimal(item.sale_price),
                     total_copies=int(copies or 0),

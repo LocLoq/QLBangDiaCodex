@@ -33,10 +33,10 @@ def theme_palette(dark_mode: bool) -> ThemePalette:
             tooltip_background="#1F2D3A", tooltip_foreground="#F8FAFC",
         )
     return ThemePalette(
-        background="#FFFFFF", surface="#F7F9FB", heading="#EDF1F4",
-        foreground="#212529", muted="#5F6B73", accent="#2C3E50",
-        border="#CED4DA", selection="#6F8588",
-        tooltip_background="#2C3E50", tooltip_foreground="#FFFFFF",
+        background="#F0F1F1", surface="#FFFFFF", heading="#F3F4F5",
+        foreground="#182537", muted="#59616E", accent="#0069BF",
+        border="#D3D5D7", selection="#D9EBFA",
+        tooltip_background="#182537", tooltip_foreground="#FFFFFF",
     )
 
 

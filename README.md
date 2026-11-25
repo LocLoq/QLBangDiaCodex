@@ -13,7 +13,7 @@ Tiến độ và các điều kiện còn thiếu được ghi ở [IMPLEMENTATI
 - Phiếu trộn thuê/mua, hạn trả theo dòng, cọc, Premium, voucher, combo cố định hoặc N Episode cùng Show; thanh toán tiền mặt/chuyển khoản/ví điện tử.
 - Trả từng phần, phạt, gia hạn, chuyển thuê thành mua, trả hàng bán, kiểm tra copy sau hoàn bán.
 - Khách hàng, Premium, đặt trước FIFO/giữ 24 giờ và đề cử phim.
-- Phiếu đã lập, thông báo Email/SMS mock, thống kê theo ngày/tháng/quý/năm hoặc khoảng tùy chọn, doanh thu Premium, top thuê/bán/combo, drill-down biểu đồ tồn kho, xuất CSV/PNG.
+- Hóa đơn đã tạo, thông báo Email/SMS mock, thống kê theo ngày/tháng/quý/năm hoặc khoảng tùy chọn, doanh thu Premium, top thuê/bán/combo, drill-down biểu đồ tồn kho, xuất CSV/PNG.
 
 ## Khởi động
 Yêu cầu MySQL trong Laragon (cài đặt laragon) đang chạy trên `127.0.0.1:3306`, user `root` không mật khẩu.

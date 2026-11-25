@@ -53,6 +53,8 @@ class ReservationQueries:
                     item.title,
                     reservation.state,
                     reservation.hold_until,
+                    item.id,
+                    item.show_id,
                 )
                 for reservation, customer, item in page.items
             ),

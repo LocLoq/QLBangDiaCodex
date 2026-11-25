@@ -11,6 +11,35 @@ from normastore.domain.enums import PaymentMethod
 
 
 class CommonWidgetsMixin:
+    def _open_catalog_details(self, item_id: int, parent=None) -> None:
+        from normastore.ui.formatting import vnd
+
+        item = self.store.catalog_item(item_id)
+        genres, reviews = self.store.catalog_metadata(item_id)
+        dialog = self._dialog("Chi tiết phim / tập", 650, 520)
+        if parent is not None:
+            dialog.transient(parent)
+            def close_details():
+                dialog.destroy()
+                if parent.winfo_exists():
+                    parent.grab_set()
+            dialog.protocol("WM_DELETE_WINDOW", close_details)
+        frame = ttk.Frame(dialog, padding=14)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=item.title, font=self._font("section"), wraplength=590).pack(anchor="w")
+        poster = ttk.Label(frame)
+        poster.pack(anchor="w", pady=5)
+        poster_path = item.poster_path
+        if not poster_path and item.show_id:
+            poster_path = next((show.poster_path for show in self.store.list_shows() if show.show_id == item.show_id), None)
+        self._load_poster_thumbnail(poster_path, poster)
+        text = (f"{item.overview or 'Chưa có tóm tắt.'}\n\n"
+                f"Thể loại: {', '.join(genres) or 'Chưa có'}\n"
+                f"Điểm: {item.vote_average or '—'}\n"
+                f"Giá thuê: {vnd(item.rental_price)} • Giá mua: {vnd(item.sale_price)}\n\n"
+                + "\n".join(f"• {review.author}: {review.content[:180]}" for review in reviews))
+        ttk.Label(frame, text=text, justify="left", wraplength=590).pack(anchor="w", fill="x")
+
     def _create_treeview(self, parent, **kwargs) -> ttk.Treeview:
         """Create a table whose headings and values use the app-wide alignment."""
         tree = ttk.Treeview(parent, **kwargs)

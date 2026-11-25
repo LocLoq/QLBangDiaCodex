@@ -29,6 +29,37 @@ class ReservationsPageMixin:
         bottom.pack(fill=X, pady=6)
         page_number = tk.IntVar(value=1)
         sort_state: dict[str, object] = {"field": "created", "descending": True}
+        reservations = {}
+
+        def open_show(show_id):
+            catalog_page = self.pages.get("Phim & tập")
+            if catalog_page is None:
+                catalog_page = ttk.Frame(self.content)
+                self.pages["Phim & tập"] = catalog_page
+                self.catalog_page(catalog_page)
+            previous_grab = self.grab_current()
+            if previous_grab:
+                previous_grab.grab_release()
+            show_dialog = catalog_page.open_show_details(show_id)
+            if show_dialog and previous_grab:
+                def restore_grab(event):
+                    if event.widget is show_dialog and previous_grab.winfo_exists():
+                        previous_grab.grab_set()
+                show_dialog.bind("<Destroy>", restore_grab, add="+")
+
+        def context_menu(event):
+            item = tree.identify_row(event.y)
+            if item not in reservations:
+                return
+            tree.selection_set(item)
+            reservation = reservations[item]
+            menu = tk.Menu(tree, tearoff=False)
+            menu.add_command(label="Xem chi tiết phim / tập", command=lambda: self._open_catalog_details(reservation.item_id))
+            if reservation.show_id:
+                menu.add_command(label="Xem chi tiết bộ phim", command=lambda: open_show(reservation.show_id))
+            menu.tk_popup(event.x_root, event.y_root)
+
+        tree.bind("<Button-3>", context_menu)
 
         def create():
             dialog = self._dialog("Tạo đặt trước", 1020, 680)
@@ -65,6 +96,7 @@ class ReservationsPageMixin:
             picker.pack(fill=BOTH, expand=True)
             card_area = ScrolledFrame(picker_area, autohide=False)
             selected_item_ids: set[int] = set()
+            picker_rows = {}
             item_page = tk.IntVar(value=1)
             item_sort: dict[str, object] = {"field": "#0", "descending": False}
 
@@ -87,6 +119,7 @@ class ReservationsPageMixin:
                 if not dialog.winfo_exists():
                     return
                 picker.delete(*picker.get_children())
+                picker_rows.clear()
                 for child in card_area.winfo_children():
                     child.destroy()
                 field = {"#0": "title", "stock": "rentable_copies"}.get(
@@ -95,6 +128,7 @@ class ReservationsPageMixin:
                 result = self.store.query_catalog(CatalogFilters(text=search_var.get(), item_rentable_or_sellable=True), PageRequest(item_page.get(), 48), SortSpec(field, bool(item_sort['descending'])))
                 item_pager(result)
                 for index, item in enumerate(result.items):
+                    picker_rows[str(item.item_id)] = item
                     picker.insert(
                         "",
                         END,
@@ -129,6 +163,14 @@ class ReservationsPageMixin:
                         ttk.Label(
                             card, text=(item.overview or "Chưa có tóm tắt.")[:130], wraplength=220
                         ).pack(anchor="w", pady=(4, 0))
+                        def card_menu(event, item=item):
+                            menu = tk.Menu(event.widget, tearoff=False)
+                            menu.add_command(label="Xem chi tiết phim / tập", command=lambda: self._open_catalog_details(item.item_id, dialog))
+                            if item.show_id:
+                                menu.add_command(label="Xem chi tiết bộ phim", command=lambda: open_show(item.show_id))
+                            menu.tk_popup(event.x_root, event.y_root)
+                        for widget in (card, *card.winfo_children()):
+                            widget.bind("<Button-3>", card_menu)
                 for column in range(3):
                     card_area.columnconfigure(column, weight=1)
                 if view_mode.get() == "Thẻ":
@@ -156,6 +198,18 @@ class ReservationsPageMixin:
                 anchor="e", pady=(8, 0)
             )
             item_pager = self._create_pager(frame, item_page, load_items)
+            def picker_menu(event):
+                row = picker.identify_row(event.y)
+                item = picker_rows.get(row)
+                if not item:
+                    return
+                picker.selection_set(row)
+                menu = tk.Menu(picker, tearoff=False)
+                menu.add_command(label="Xem chi tiết phim / tập", command=lambda: self._open_catalog_details(item.item_id, dialog))
+                if item.show_id:
+                    menu.add_command(label="Xem chi tiết bộ phim", command=lambda: open_show(item.show_id))
+                menu.tk_popup(event.x_root, event.y_root)
+            picker.bind("<Button-3>", picker_menu)
             self._install_sortable_headings(
                 picker,
                 {"#0": "Phim / tập", "type": "Loại", "stock": "Sẵn thuê / mua"},
@@ -178,10 +232,11 @@ class ReservationsPageMixin:
         def refresh():
             self.store.expire_reservation_holds()
             tree.delete(*tree.get_children())
+            reservations.clear()
             result = self.store.query_reservations(PageRequest(page_number.get(), 50), SortSpec(str(sort_state['field']), bool(sort_state['descending'])))
             pager(result)
             for reservation in result.items:
-                tree.insert(
+                row_id = tree.insert(
                     "",
                     END,
                     values=(
@@ -191,6 +246,7 @@ class ReservationsPageMixin:
                         format_datetime(reservation.hold_until),
                     ),
                 )
+                reservations[row_id] = reservation
 
         ttk.Button(bottom, text="Tạo đặt trước", command=create, bootstyle="primary").pack(
             side=LEFT

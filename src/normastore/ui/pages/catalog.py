@@ -473,6 +473,8 @@ class CatalogPageMixin:
                 )
                 widget.pack(fill=X, pady=(0, 7))
 
+            poster_value = self._poster_editor(form, item.poster_path if item else None)
+
             ttk.Label(form, text="Ngày phát hành (để trống nếu chưa biết)").pack(anchor="w")
             release = tb.DateEntry(form, dateformat="%d/%m/%Y", popup_title="Chọn ngày phát hành")
             release.pack(fill=X, pady=(0, 7))
@@ -506,6 +508,7 @@ class CatalogPageMixin:
                         sale_price_mode=CATALOG_PRICE_MODES[pricing["sale_mode"].get()],
                         rental_price_percent=Decimal(pricing["rental_percent"].get()),
                         sale_price_percent=Decimal(pricing["sale_percent"].get()),
+                        poster_path=poster_value(),
                     )
                     if item is None:
                         data["replacement_value"] = Decimal(values["sale_price"].get())
@@ -531,6 +534,7 @@ class CatalogPageMixin:
                 tk.BooleanVar(value=item.can_rent),
                 tk.BooleanVar(value=item.can_sell),
             )
+            location = tuple(tk.StringVar() for _ in range(3))
             ttk.Label(form, text="Mã vạch").pack(anchor="w")
             ttk.Entry(form, textvariable=barcode).pack(fill=X, pady=(2, 8))
             ttk.Label(form, text="Định dạng").pack(anchor="w")
@@ -539,12 +543,17 @@ class CatalogPageMixin:
             ).pack(fill=X, pady=(2, 8))
             ttk.Checkbutton(form, text="Cho thuê", variable=can_rent).pack(anchor="w")
             ttk.Checkbutton(form, text="Cho bán", variable=can_sell).pack(anchor="w")
+            location_row = ttk.Frame(form)
+            location_row.pack(fill=X, pady=5)
+            for label, variable in zip(("Dãy", "Kệ", "Ngăn"), location):
+                ttk.Label(location_row, text=label).pack(side=LEFT)
+                ttk.Entry(location_row, textvariable=variable, width=10).pack(side=LEFT, padx=3)
             footer = ttk.Frame(dialog, padding=(14, 0, 14, 14))
             footer.pack(fill=X)
 
             def save():
                 try:
-                    self.store.add_copy(item.id, barcode.get(), media.get(), self.account.employee_id, can_rent.get(), can_sell.get())
+                    self.store.add_copy(item.id, barcode.get(), media.get(), self.account.employee_id, can_rent.get(), can_sell.get(), *(v.get() for v in location))
                     dialog.destroy()
                     refresh()
                 except Exception as exc:
@@ -619,6 +628,26 @@ class CatalogPageMixin:
             season_combo.pack(anchor="w", pady=(0, 8))
             episode_actions = ttk.Frame(detail_frame)
             episode_actions.pack(side="bottom", fill=X, pady=(8, 0))
+            def edit_show_poster():
+                selected_show = show_tree.selection()
+                if not selected_show:
+                    return messagebox.showinfo("Ảnh bìa", "Hãy chọn bộ phim.", parent=dialog)
+                show = by_id[selected_show[0]]
+                editor = self._dialog("Ảnh bìa bộ phim", 560, 280)
+                form = ttk.Frame(editor, padding=12)
+                form.pack(fill=BOTH, expand=True)
+                poster = self._poster_editor(form, show.poster_path)
+                def save_poster():
+                    try:
+                        self.store.set_show_poster(show.show_id, poster(), self.account.employee_id)
+                        editor.destroy()
+                        dialog.destroy()
+                        refresh()
+                    except Exception as exc:
+                        messagebox.showerror("Ảnh bìa", str(exc), parent=editor)
+                ttk.Button(form, text="Lưu", command=save_poster, bootstyle="primary").pack(anchor="e", pady=6)
+            ttk.Button(episode_actions, text="Ảnh bìa bộ phim", command=edit_show_poster,
+                       state="normal" if self._can_manage() else "disabled").pack(side=RIGHT)
             episode_holder = ttk.Frame(detail_frame)
             episode_holder.pack(fill=BOTH, expand=True)
             episodes = self._create_treeview(
@@ -705,6 +734,9 @@ class CatalogPageMixin:
             initial = str(initial_show_id) if str(initial_show_id) in by_id else str(shows[0].show_id)
             show_tree.selection_set(initial)
             select_show()
+            return dialog
+
+        page.open_show_details = show_details
 
         def bulk_episodes(initial_show_id=None):
             shows = {

@@ -36,24 +36,21 @@ class CheckoutPageMixin:
         ttk.Label(top, text="Hạn trả:").pack(side=LEFT, padx=(18, 3))
         due_entry = tb.DateEntry(top, dateformat="%d/%m/%Y", startdate=date.today() + timedelta(days=3), popup_title="Chọn hạn trả", width=11)
         due_entry.pack(side=LEFT)
-        ttk.Label(top, text="Voucher:").pack(side=LEFT, padx=(18, 3))
         voucher_var = tk.StringVar()
-        voucher_combo = ttk.Combobox(top, textvariable=voucher_var, width=14)
-        voucher_combo.pack(side=LEFT)
-        ttk.Label(top, text="Combo:").pack(side=LEFT, padx=(18, 3))
         combo_var = tk.StringVar()
-        combo_combo = ttk.Combobox(top, textvariable=combo_var, state="readonly", width=24)
-        combo_combo.pack(side=LEFT)
         customer_details = tk.StringVar(value="Chọn khách hàng để xem thông tin.")
         ttk.Label(page, textvariable=customer_details, wraplength=1100, justify=LEFT).pack(anchor="w", pady=(0, 6))
         pane = ttk.Panedwindow(page, orient="horizontal")
         pane.pack(fill=BOTH, expand=True)
-        catalog_frame, cart_frame = ttk.Frame(pane, padding=5), ttk.Frame(pane, padding=5)
+        catalog_frame = ttk.Frame(pane, padding=5, width=550)
+        cart_frame = ttk.Frame(pane, padding=5, width=380)
+        catalog_frame.pack_propagate(False)
+        cart_frame.pack_propagate(False)
         pane.add(catalog_frame, weight=3)
         pane.add(cart_frame, weight=2)
         search, picker_type = tk.StringVar(), tk.StringVar(value="Tất cả")
         item_types = {"Tất cả": "", "Phim lẻ": "MOVIE", "Tập phim": "EPISODE"}
-        picker_rent, picker_sell = tk.BooleanVar(), tk.BooleanVar()
+        picker_rent, picker_sell = tk.BooleanVar(value=True), tk.BooleanVar(value=True)
         picker_view, picker_page = tk.StringVar(value="Danh sách"), tk.IntVar(value=1)
         picker_filters = ttk.Labelframe(catalog_frame, text="Tìm phim / tập", padding=(8, 5))
         picker_filters.pack(fill=X, pady=(0, 5))
@@ -117,7 +114,7 @@ class CheckoutPageMixin:
                 picker_advanced_open.set(False)
                 picker_advanced_button.configure(text="Lọc nâng cao ▾")
             else:
-                picker_advanced.pack(fill=X, pady=(0, 5))
+                picker_advanced.pack(fill=X, pady=(0, 5), before=catalog)
                 picker_advanced_open.set(True)
                 picker_advanced_button.configure(text="Thu gọn ▴")
 
@@ -200,17 +197,37 @@ class CheckoutPageMixin:
         cart.heading("action", text="Loại")
         cart.heading("price", text="Giá")
         cart.heading("due", text="Hạn trả")
-        cart.column("#0", width=180)
+        cart.column("#0", width=140, minwidth=70)
         cart.column("action", width=65)
-        cart.column("price", width=90)
-        cart.column("due", width=90)
-        cart.pack(fill=BOTH, expand=True)
+        cart.column("price", width=75, minwidth=50)
+        cart.column("due", width=75, minwidth=55)
+        summary = ttk.Frame(cart_frame, padding=(0, 5))
+        summary.columnconfigure(1, weight=1)
+        amounts = {name: tk.StringVar(value="0 đ") for name in ("gross", "voucher", "combo", "premium", "discovery", "deposit")}
+        ttk.Label(summary, text="Tổng trước giảm giá:").grid(row=0, column=0, sticky="w")
+        ttk.Label(summary, textvariable=amounts["gross"]).grid(row=0, column=2, sticky="e")
+        ttk.Label(summary, text="Voucher:").grid(row=1, column=0, sticky="w")
+        voucher_combo = ttk.Combobox(summary, textvariable=voucher_var, width=14)
+        voucher_combo.grid(row=1, column=1, sticky="ew", padx=6, pady=2)
+        Tooltip(voucher_combo, lambda: voucher_var.get())
+        ttk.Label(summary, textvariable=amounts["voucher"]).grid(row=1, column=2, sticky="e")
+        ttk.Label(summary, text="Combo:").grid(row=2, column=0, sticky="w")
+        combo_combo = ttk.Combobox(summary, textvariable=combo_var, state="readonly", width=14)
+        combo_combo.grid(row=2, column=1, sticky="ew", padx=6, pady=2)
+        Tooltip(combo_combo, lambda: combo_var.get())
+        ttk.Label(summary, textvariable=amounts["combo"]).grid(row=2, column=2, sticky="e")
+        for row, (name, label) in enumerate((("premium", "Premium:"), ("discovery", "Khám phá:"), ("deposit", "Tiền cọc:")), 3):
+            ttk.Label(summary, text=label).grid(row=row, column=0, sticky="w")
+            ttk.Label(summary, textvariable=amounts[name]).grid(row=row, column=2, sticky="e")
         total_var = tk.StringVar(value="Tổng cần thu: 0 đ")
-        ttk.Label(
+        total_label = ttk.Label(
             cart_frame, textvariable=total_var, font=("Segoe UI", 11, "bold"), bootstyle="success"
-        ).pack(anchor="e", pady=6)
+        )
         buttons = ttk.Frame(cart_frame)
-        buttons.pack(fill=X)
+        buttons.pack(side="bottom", fill=X)
+        total_label.pack(side="bottom", anchor="e", pady=6)
+        summary.pack(side="bottom", fill=X)
+        cart.pack(fill=BOTH, expand=True)
         cart_lines: list[CheckoutLine] = []
         catalog_rows = {}
         customers: dict[str, CustomerView] = {}
@@ -231,7 +248,9 @@ class CheckoutPageMixin:
             combos.clear()
             combo_values = ["Không dùng combo"]
             for combo in self.store.list_combos():
-                key = f"{combo.combo_id} — {combo.name} ({vnd(combo.discount_amount)})"
+                key = f"{combo.name} ({vnd(combo.discount_amount)})"
+                if key in combos:
+                    key = f"{key} — #{combo.combo_id}"
                 combos[key] = combo
                 combo_values.append(key)
             combo_combo["values"] = combo_values
@@ -240,7 +259,7 @@ class CheckoutPageMixin:
             vouchers.clear()
             for voucher in self.store.list_vouchers():
                 if voucher.effective_state == "Đang hiệu lực":
-                    label = f"{voucher.code} — {voucher.description} ({voucher.starts_on or 'không giới hạn'} đến {voucher.ends_on or 'không giới hạn'})"
+                    label = f"{voucher.code} — {voucher.description}"
                     vouchers[label] = voucher.code
             voucher_combo["values"] = ["", *vouchers]
 
@@ -422,14 +441,39 @@ class CheckoutPageMixin:
                     )
                 dialog = self._dialog("Chọn bản đĩa", 720, 420)
                 ttk.Label(dialog, text="Chọn bản đĩa để " + ("thuê" if action == LineAction.RENT else "mua"), padding=10).pack(anchor="w")
-                copy_tree = self._create_treeview(dialog, columns=("barcode", "format", "condition", "price"), show="headings", selectmode="browse")
+                filters = ttk.Frame(dialog, padding=(10, 0))
+                filters.pack(fill=X)
+                locations = tuple(tk.StringVar() for _ in range(3))
+                for label, variable in zip(("Dãy", "Kệ", "Ngăn"), locations):
+                    ttk.Label(filters, text=label).pack(side=LEFT)
+                    ttk.Entry(filters, textvariable=variable, width=12).pack(side=LEFT, padx=4)
+                holder = ttk.Frame(dialog)
+                holder.pack(fill=BOTH, expand=True, padx=10)
+                copy_tree = self._create_treeview(holder, columns=("barcode", "format", "condition", "percent", "price", "location"), show="headings", selectmode="browse")
                 for column, title in (("barcode", "Mã vạch"), ("format", "Định dạng"), ("condition", "Tình trạng"), ("price", "Giá")):
                     copy_tree.heading(column, text=title)
-                copy_tree.pack(fill=BOTH, expand=True, padx=10)
+                copy_tree.heading("percent", text="Tình trạng (%)")
+                copy_tree.heading("location", text="Dãy / Kệ / Ngăn")
+                horizontal = ttk.Scrollbar(holder, orient="horizontal", command=copy_tree.xview)
+                horizontal.pack(side="bottom", fill=X)
+                vertical = ttk.Scrollbar(holder, orient="vertical", command=copy_tree.yview)
+                vertical.pack(side=RIGHT, fill=Y)
+                copy_tree.configure(xscrollcommand=horizontal.set, yscrollcommand=vertical.set)
+                copy_tree.pack(fill=BOTH, expand=True)
                 by_id = {str(choice.copy_id): choice for choice in choices}
-                for choice in choices:
-                    copy_tree.insert("", END, iid=str(choice.copy_id), values=(choice.barcode, choice.media_format, CONDITION_LABELS[choice.condition], vnd(choice.unit_price)))
-                copy_tree.selection_set(str(choices[0].copy_id))
+                def filter_copies(*_args):
+                    copy_tree.delete(*copy_tree.get_children())
+                    for choice in choices:
+                        if any(variable.get().strip().casefold() not in (value or "").casefold()
+                               for variable, value in zip(locations, (choice.aisle, choice.rack, choice.compartment))):
+                            continue
+                        copy_tree.insert("", END, iid=str(choice.copy_id), values=(choice.barcode, choice.media_format, CONDITION_LABELS[choice.condition], f"{choice.condition_percent}%", vnd(choice.unit_price), " / ".join(x or "—" for x in (choice.aisle, choice.rack, choice.compartment))))
+                    children = copy_tree.get_children()
+                    if children:
+                        copy_tree.selection_set(children[0])
+                for variable in locations:
+                    variable.trace_add("write", filter_copies)
+                filter_copies()
                 selected = []
 
                 def confirm():
@@ -495,10 +539,10 @@ class CheckoutPageMixin:
             ttk.Label(controls, text="đến tập").pack(side=LEFT, padx=3)
             ttk.Entry(controls, textvariable=last_var, width=6).pack(side=LEFT)
             ttk.Label(controls, text="(để trống cả hai để chọn cả mùa)").pack(side=LEFT, padx=8)
+            footer = ttk.Frame(frame)
+            footer.pack(side="bottom", fill=X, pady=4)
             choices_frame = ScrolledFrame(frame, autohide=True)
             choices_frame.pack(fill=BOTH, expand=True, pady=6)
-            footer = ttk.Frame(frame)
-            footer.pack(fill=X, pady=4)
             selections = []
             current = {"action": None}
 
@@ -526,13 +570,23 @@ class CheckoutPageMixin:
                         customer.id if customer else None, {line.copy_id for line in cart_lines},
                         start, end,
                     )
-                    for episode, choices in result:
+                    by_number = {episode.episode_number: (episode, choices) for episode, choices in result}
+                    first = start if start is not None else min(by_number)
+                    last = end if end is not None else max(by_number)
+                    for number in range(first, last + 1):
                         row = ttk.Frame(choices_frame, padding=4)
                         row.pack(fill=X)
-                        ttk.Label(row, text=f"Tập {episode.episode_number}: {episode.title}", width=40).pack(side=LEFT)
-                        mapping = {f"{choice.barcode} • {choice.media_format} • {CONDITION_LABELS[choice.condition]} • {vnd(choice.unit_price)}": choice for choice in choices}
+                        if number not in by_number:
+                            ttk.Label(row, text=f"Tập {number}: Chưa nhập danh mục", bootstyle="secondary").pack(anchor="w")
+                            continue
+                        episode, choices = by_number[number]
+                        ttk.Label(row, text=f"Tập {episode.episode_number}: {episode.title}", wraplength=650).pack(anchor="w")
+                        if not choices:
+                            ttk.Label(row, text="Không có đĩa phù hợp", bootstyle="secondary").pack(anchor="w")
+                            continue
+                        mapping = {f"{choice.barcode} • {choice.media_format} • {CONDITION_LABELS[choice.condition]} {choice.condition_percent}% • {vnd(choice.unit_price)} • {' / '.join(x or '—' for x in (choice.aisle, choice.rack, choice.compartment))}": choice for choice in choices}
                         selected = tk.StringVar(value=next(iter(mapping)))
-                        ttk.Combobox(row, textvariable=selected, values=tuple(mapping), state="readonly", width=40).pack(side=LEFT, fill=X, expand=True)
+                        ttk.Combobox(row, textvariable=selected, values=tuple(mapping), state="readonly").pack(fill=X, expand=True)
                         selections.append((episode.item_id, selected, mapping))
                     current["action"] = action
                 except (ValueError, TypeError) as exc:
@@ -576,13 +630,19 @@ class CheckoutPageMixin:
         ttk.Button(picker_filters, text="Chọn phim bộ", command=lambda: select_season()).pack(side=RIGHT, padx=4)
 
         def update_quote():
+            for variable in amounts.values():
+                variable.set("0 đ")
             customer = customers.get(customer_var.get())
             if not customer or not cart_lines:
                 total_var.set("Tổng cần thu: 0 đ")
                 return
             try:
                 quote = self.store.quote(customer.id, cart_lines, voucher_code(), combo_ids())
-                total_var.set(f"Tổng cần thu: {vnd(quote.total_due)} (cọc {vnd(quote.deposit)})")
+                amounts["gross"].set(vnd(quote.gross))
+                amounts["deposit"].set(vnd(quote.deposit))
+                for source in ("voucher", "combo", "premium", "discovery"):
+                    amounts[source].set(f"- {vnd(quote.discount_sources.get(source.upper(), Decimal('0')))}")
+                total_var.set(f"Tổng cần thu: {vnd(quote.total_due)}")
             except Exception as exc:
                 total_var.set(f"Kiểm tra: {exc}")
 

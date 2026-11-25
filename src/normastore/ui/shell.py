@@ -18,17 +18,16 @@ _MDL2_FONT = "Segoe MDL2 Assets"
 _NAVIGATION_ITEMS = (
     ("Tổng quan", "\ue80f", "dashboard_page", False),
     ("Tạo phiếu", "\ue7bf", "checkout_page", False),
-    ("Phiếu đã lập", "\ue8fd", "orders_page", False),
-    ("Trả đĩa & phạt", "\ue72b", "returns_page", False),
+    ("Hóa đơn đã tạo", "\ue8fd", "orders_page", False),
+    ("Đĩa đã được thuê", "\ue72b", "returns_page", False),
     ("Đặt trước", "\ue787", "reservations_page", False),
     ("Phim & tập", "\ue714", "catalog_page", False),
     ("Kho đĩa", "\ue7b8", "inventory_page", False),
     ("Khách hàng & Premium", "\ue716", "customers_page", False),
     ("Combo / Voucher", "\ue8ec", "promotions_page", False),
-    ("Nhân viên", "\ue916", "employees_page", False),
     ("Thông báo", "\uea8f", "notifications_page", False),
     ("Thống kê", "\ueb05", "statistics_page", False),
-    ("Nhật ký hành động", "\ue81c", "audit_page", True),
+    ("Lịch sử và hoạt động", "\ue81c", "audit_page", True),
     ("Cài đặt & Giới thiệu", "\ue713", "settings_page", False),
 )
 
@@ -87,6 +86,9 @@ class ShellMixin:
         self._drawer_temporary = False
         self._nav_buttons: dict[str, list[ttk.Button]] = {}
         self._nav_icon_widgets: list[tuple[ttk.Button, str]] = []
+        self._hidden_navigation = []
+        self._hidden_visible = False
+        self._home_clicks = 0
         self._navigation_icon_images: dict[str, ImageTk.PhotoImage] = {}
 
         self.sidebar = ttk.Frame(outer, padding=(6, 10), width=_RAIL_WIDTH)
@@ -123,14 +125,20 @@ class ShellMixin:
                 glyph,
                 label,
                 icon_only=True,
-                command=lambda n=label, b=builder: self._navigate(n, b),
+                command=lambda n=label, b=builder: self._navigate(n, b, home_icon=(n == "Tổng quan")),
             )
+            rail_button = self._nav_icon_widgets[-1][0]
             self._add_navigation_button(
                 self.drawer,
                 glyph,
                 label,
                 command=lambda n=label, b=builder: self._navigate(n, b),
             )
+            if builder_name in ("audit_page", "settings_page"):
+                drawer_button = self._nav_icon_widgets[-1][0]
+                self._hidden_navigation.extend((rail_button, drawer_button))
+                rail_button.pack_forget()
+                drawer_button.pack_forget()
 
         controls = ttk.Frame(self.drawer)
         controls.pack(fill=X, side="bottom", pady=(12, 0))
@@ -209,7 +217,20 @@ class ShellMixin:
             button.configure(image=image)
         self._navigation_icon_images = images
 
-    def _navigate(self, name: str, builder) -> None:
+    def _navigate(self, name: str, builder, *, home_icon: bool = False) -> None:
+        if home_icon:
+            self._home_clicks += 1
+            if self._home_clicks == 5:
+                self._home_clicks = 0
+                self._hidden_visible = not self._hidden_visible
+                for button in self._hidden_navigation:
+                    if self._hidden_visible:
+                        button.pack(fill=X, pady=1)
+                    else:
+                        button.pack_forget()
+                self._help_menu.entryconfigure("Giới thiệu", state="normal" if self._hidden_visible else "disabled")
+        else:
+            self._home_clicks = 0
         self.show_page(name, builder)
         if not self._drawer_pinned:
             self._close_drawer()
@@ -275,7 +296,9 @@ class ShellMixin:
         help_menu.add_command(
             label="Giới thiệu",
             command=lambda: self.show_page("Cài đặt & Giới thiệu", self.settings_page),
+            state="disabled",
         )
+        self._help_menu = help_menu
         menu.add_cascade(label="Trợ giúp", menu=help_menu)
         self._menus = [menu, file_menu, help_menu]
         self.config(menu=menu)
@@ -316,6 +339,8 @@ class ShellMixin:
         )
 
     def show_page(self, name: str, builder) -> None:
+        if name != "Tổng quan":
+            self._home_clicks = 0
         Tooltip.hide_active()
         for page in self.pages.values():
             page.pack_forget()

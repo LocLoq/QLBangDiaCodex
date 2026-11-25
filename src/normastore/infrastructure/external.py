@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import smtplib
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,12 +106,24 @@ class PosterCache:
         return self.folder / f"{digest}.jpg"
 
     def fetch(self, poster_path: str) -> Path:
+        local = Path(poster_path)
+        if local.is_absolute() and local.exists():
+            return local
         target = self.path_for(poster_path)
         if target.exists():
             return target
-        response = httpx.get(f"https://image.tmdb.org/t/p/w342{poster_path}", timeout=20)
+        url = poster_path if poster_path.startswith(("https://", "http://")) else f"https://image.tmdb.org/t/p/w342{poster_path}"
+        response = httpx.get(url, timeout=20, follow_redirects=True)
         response.raise_for_status()
-        target.write_bytes(response.content)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=self.folder, prefix="poster-", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(response.content)
+            temporary.replace(target)
+        finally:
+            if temporary:
+                temporary.unlink(missing_ok=True)
         return target
 
 

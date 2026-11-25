@@ -34,6 +34,7 @@ from normastore.application.contracts import (
     PagedResult,
     PaymentInput,
     Quote,
+    RentalReturnInput,
     ReceiptDiscount,
     ReceiptPayment,
     ReservationView,
@@ -433,7 +434,7 @@ class _StoreOperations:
         choices = []
         for copy, item in self.catalog_queries.checkout_copies(item_id, action, excluded_copy_ids, customer_id=customer_id):
             price = self._copy_price(copy, action)
-            choices.append(CopyChoice(copy.id, item.id, copy.barcode, item.title, action, Decimal(price), copy.media_format, copy.condition))
+            choices.append(CopyChoice(copy.id, item.id, copy.barcode, item.title, action, Decimal(price), copy.media_format, copy.condition, copy.condition_percent, copy.aisle, copy.rack, copy.compartment))
         return choices
 
     def list_genres(self) -> tuple[Genre, ...]:
@@ -496,6 +497,7 @@ class _StoreOperations:
                 overview=show.overview,
                 vote_average=Decimal(show.vote_average) if show.vote_average is not None else None,
                 season_count=int(season_count),
+                poster_path=show.poster_path,
             )
             for show, season_count in self.catalog_queries.fetch_list_shows_rows().all()
         ]
@@ -530,16 +532,9 @@ class _StoreOperations:
         episodes = self.list_show_episodes(show_id, season_number)
         if first_episode is not None:
             episodes = [episode for episode in episodes if first_episode <= episode.episode_number <= last_episode]
-            numbers = {episode.episode_number for episode in episodes}
-            missing = [str(n) for n in range(first_episode, last_episode + 1) if n not in numbers]
-            if missing:
-                raise BusinessError("Chưa có các tập: " + ", ".join(missing))
-        if not episodes:
+        if not episodes and first_episode is None:
             raise BusinessError("Mùa này chưa có tập phù hợp.")
         result = [(episode, self.checkout_copies(episode.item_id, action, excluded_copy_ids, customer_id)) for episode in episodes]
-        missing = [str(episode.episode_number) for episode, choices in result if not choices]
-        if missing:
-            raise BusinessError("Không có đĩa phù hợp cho các tập: " + ", ".join(missing))
         return result
 
     def create_show(self, title: str, overview: str = "", actor_id: int | None = None) -> Show:
@@ -552,6 +547,17 @@ class _StoreOperations:
         self.catalog_queries.add_show(show)
         self.catalog_queries.flush()
         self.catalog_queries.add_audit_log(AuditLog(actor_id=actor_id, action='CREATE_SHOW', entity='Show', entity_id=str(show.id), detail=show.title))
+        return show
+
+    def set_show_poster(self, show_id: int, poster_path: str | None, actor_id: int) -> Show:
+        self._require_manager(actor_id)
+        show = self.catalog_queries.get_show(show_id)
+        if not show:
+            raise BusinessError("Không tìm thấy bộ phim.")
+        if poster_path and len(poster_path) > 500:
+            raise BusinessError("Đường dẫn ảnh không được dài quá 500 ký tự.")
+        show.poster_path = poster_path or None
+        self._audit(actor_id, "UPDATE_SHOW_POSTER", "Show", show.id, {"poster_path": show.poster_path})
         return show
 
     def add_episodes_bulk(
@@ -613,10 +619,15 @@ class _StoreOperations:
         actor_id: int | None = None,
         can_rent: bool | None = None,
         can_sell: bool | None = None,
+        aisle: str = "",
+        rack: str = "",
+        compartment: str = "",
     ) -> PhysicalCopy:
         if actor_id is None:
             raise BusinessError("Cần tài khoản quản lý để nhập kho.")
         self._require_manager(actor_id)
+        if any(len(value.strip()) > 80 for value in (aisle, rack, compartment)):
+            raise BusinessError("Vị trí không được dài quá 80 ký tự.")
         item = self.catalog_item(item_id)
         if not barcode.strip():
             raise BusinessError("Barcode là bắt buộc.")
@@ -632,6 +643,9 @@ class _StoreOperations:
             media_format=media_format,
             can_rent=rent_allowed,
             can_sell=sell_allowed,
+            aisle=aisle.strip() or None,
+            rack=rack.strip() or None,
+            compartment=compartment.strip() or None,
         )
         self.inventory_queries.add_physical_copy(copy)
         self.inventory_queries.flush()
@@ -639,6 +653,7 @@ class _StoreOperations:
         self._audit(actor_id, "ADD_COPY", "PhysicalCopy", copy.id, {
             "barcode": copy.barcode, "format": copy.media_format,
             "can_rent": copy.can_rent, "can_sell": copy.can_sell,
+            "location": [copy.aisle, copy.rack, copy.compartment],
         })
         self.allocate_waiting_reservations(item.id)
         return copy
@@ -667,6 +682,8 @@ class _StoreOperations:
         self, copy_id: int, request: UpdateInventoryCopyRequest, actor_id: int
     ) -> PhysicalCopy:
         self._require_manager(actor_id)
+        if any(value is not None and len(value.strip()) > 80 for value in (request.aisle, request.rack, request.compartment)):
+            raise BusinessError("Vị trí không được dài quá 80 ký tự.")
         if not request.barcode.strip() or not (request.can_rent or request.can_sell):
             raise BusinessError("Cần barcode và ít nhất một quyền thuê/bán.")
         if any(value is not None and (not Decimal(value).is_finite() or value < 0) for value in (
@@ -697,6 +714,7 @@ class _StoreOperations:
         before = {
             "barcode": copy.barcode, "format": copy.media_format, "condition": copy.condition.value,
             "status": copy.status.value, "can_rent": copy.can_rent, "can_sell": copy.can_sell,
+            "location": [copy.aisle, copy.rack, copy.compartment],
         }
         old_status = copy.status
         copy.barcode = request.barcode.strip()
@@ -710,6 +728,10 @@ class _StoreOperations:
         copy.sale_price_mode = request.sale_price_mode
         copy.rental_price_percent = request.rental_price_percent
         copy.sale_price_percent = request.sale_price_percent
+        for name in ("aisle", "rack", "compartment"):
+            value = getattr(request, name)
+            if value is not None:
+                setattr(copy, name, value.strip() or None)
         copy.status = request.status
         if old_status != copy.status:
             self._status_history(copy, old_status, copy.status, request.note.strip(), actor_id)
@@ -720,6 +742,7 @@ class _StoreOperations:
             "after": {
                 "barcode": copy.barcode, "format": copy.media_format, "condition": copy.condition.value,
                 "status": copy.status.value, "can_rent": copy.can_rent, "can_sell": copy.can_sell,
+                "location": [copy.aisle, copy.rack, copy.compartment],
             },
             "note": request.note.strip() or None,
         })
@@ -933,8 +956,8 @@ class _StoreOperations:
         })
         return order
 
-    def query_active_rentals(self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("due", False)) -> PagedResult[ActiveRental]:
-        return self.orders_queries.query_active_rentals(page_request, sort)
+    def query_active_rentals(self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("due", False), customer_name: str = "") -> PagedResult[ActiveRental]:
+        return self.orders_queries.query_active_rentals(page_request, sort, customer_name)
 
     def active_rentals(self) -> list[ActiveRental]:
         return list(self.query_active_rentals(PageRequest(1, 10_000)).items)
@@ -1030,14 +1053,32 @@ class _StoreOperations:
             "filename": filename,
         })
 
-    def return_rentals(self, employee_id: int, customer_id: int, returns: list[tuple[int, ReturnOutcome, str]], payment: PaymentInput | None = None, today: date | None = None) -> Decimal:
+    def return_rentals(self, employee_id: int, customer_id: int, returns: list[RentalReturnInput | tuple[int, ReturnOutcome, str]], payment: PaymentInput | None = None, today: date | None = None) -> Decimal:
         today = today or date.today()
         receipt = ReturnReceipt(customer_id=customer_id, employee_id=employee_id, returned_on=today)
         self.orders_queries.add_return_receipt(receipt)
         self.orders_queries.flush()
         balance = Decimal("0")
         returned_item_ids: set[int] = set()
-        for term_id, outcome, note in returns:
+        order_deposits: dict[int, dict[int, Decimal]] = {}
+        audit_lines = []
+        for entry in returns:
+            if isinstance(entry, tuple):
+                term_id, outcome, note = entry
+                condition = percent = status = damage_charge = None
+            else:
+                term_id, outcome, note = entry.term_id, entry.outcome, entry.note
+                condition, percent, status = entry.condition, entry.condition_percent, entry.status
+                damage_charge = entry.damage_charge
+            if not isinstance(outcome, ReturnOutcome):
+                raise BusinessError("Kết quả trả đĩa không hợp lệ.")
+            if condition is not None and not isinstance(condition, CopyCondition):
+                raise BusinessError("Tình trạng đĩa không hợp lệ.")
+            if percent is not None and (not Decimal(percent).is_finite() or not 0 <= Decimal(percent) <= 100):
+                raise BusinessError("Tình trạng phải từ 0 đến 100%.")
+            allowed = {CopyStatus.AVAILABLE, CopyStatus.INSPECTION, CopyStatus.REPAIR, CopyStatus.RETIRED}
+            if status is not None and (status != CopyStatus.LOST if outcome == ReturnOutcome.LOST else status not in allowed):
+                raise BusinessError("Trạng thái sau trả không hợp lệ.")
             term = self.orders_queries.fetch_return_rentals_term(term_id)
             if not term or term.state != RentalState.ACTIVE:
                 raise BusinessError("Dòng thuê không còn hoạt động.")
@@ -1046,18 +1087,24 @@ class _StoreOperations:
             copy = term.line.copy
             assert copy is not None
             late = late_fee(term.due_date, today, Decimal(term.late_daily_rate))
-            damage = damage_fee(copy.item.replacement_value, outcome)
+            try:
+                damage = damage_fee(copy.item.replacement_value, outcome, damage_charge)
+            except ValueError as exc:
+                raise BusinessError(str(exc)) from exc
             charges = late + damage
             if late:
                 self.orders_queries.add_penalty_charge(PenaltyCharge(rental_term_id=term.id, kind='LATE', amount=late, reason='Trả quá hạn'))
             if damage:
                 self.orders_queries.add_penalty_charge(PenaltyCharge(rental_term_id=term.id, kind=outcome.value, amount=damage, reason=note or outcome.value))
-            deposit = Decimal(term.line.deposit_amount)
+            order = term.line.order
+            if order.id not in order_deposits:
+                _, order_deposits[order.id] = self.orders_queries.rental_order_amounts([order])
+            deposit = order_deposits[order.id][term.line_id]
             balance += charges - deposit
             before = copy.status
+            before_condition, before_percent = copy.condition, copy.condition_percent
             if outcome == ReturnOutcome.NORMAL:
                 copy.status = CopyStatus.AVAILABLE
-                returned_item_ids.add(copy.item_id)
             elif outcome in (ReturnOutcome.LIGHT_DAMAGE, ReturnOutcome.HEAVY_DAMAGE):
                 copy.status = CopyStatus.REPAIR
                 copy.condition = CopyCondition.DAMAGED
@@ -1065,43 +1112,67 @@ class _StoreOperations:
             else:
                 copy.status = CopyStatus.LOST
                 term.state = RentalState.LOST
+            if condition is not None:
+                copy.condition = condition
+            if percent is not None:
+                copy.condition_percent = Decimal(percent)
+            if status is not None:
+                copy.status = status
+            if copy.status == CopyStatus.AVAILABLE:
+                returned_item_ids.add(copy.item_id)
             if term.state != RentalState.LOST:
                 term.state = RentalState.RETURNED
             term.returned_on = today
             self.orders_queries.add_return_line(ReturnLine(receipt_id=receipt.id, rental_term_id=term.id, outcome=outcome.value, note=note or None))
             self._status_history(copy, before, copy.status, f"Trả đĩa: {outcome.value}", employee_id)
+            audit_lines.append({"term_id": term.id, "before_condition": before_condition.value,
+                                "before_percent": str(before_percent), "condition": copy.condition.value,
+                                "percent": str(copy.condition_percent), "status": copy.status.value})
         for item_id in returned_item_ids:
             self.allocate_waiting_reservations(item_id)
+        amount = Decimal(payment.amount) if payment else Decimal("0")
+        if not amount.is_finite() or not 0 <= amount <= max(Decimal("0"), balance):
+            raise BusinessError("Khoản thu thêm không hợp lệ.")
         if balance < 0:
             self.orders_queries.add_payment_transaction(PaymentTransaction(customer_id=customer_id, employee_id=employee_id, method=PaymentMethod.CASH, category='DEPOSIT_REFUND', amount=balance))
-        elif payment:
-            amount = Decimal(payment.amount)
-            if amount < 0 or amount > balance:
-                raise BusinessError("Khoản thu thêm không hợp lệ.")
-            if amount:
-                self.orders_queries.add_payment_transaction(PaymentTransaction(customer_id=customer_id, employee_id=employee_id, method=payment.method, category='RETURN_SETTLEMENT', amount=amount))
+        elif payment and amount:
+            self.orders_queries.add_payment_transaction(PaymentTransaction(customer_id=customer_id, employee_id=employee_id, method=payment.method, category='RETURN_SETTLEMENT', amount=amount))
         self._audit(employee_id, "RETURN_RENTAL", "ReturnReceipt", receipt.id, {
-            "customer_id": customer_id, "lines": len(returns), "balance": str(balance),
+            "customer_id": customer_id, "lines": audit_lines, "balance": str(balance),
         })
         return balance
 
-    def extend_rental(self, rental_term_id: int, employee_id: int, days: int = 3) -> RentalTerm:
+    def extend_rental(self, rental_term_id: int, employee_id: int, new_due_date: date | None = None,
+                      fee: Decimal | None = None, method: PaymentMethod = PaymentMethod.CASH,
+                      today: date | None = None) -> RentalTerm:
+        today = today or date.today()
         term = self.orders_queries.fetch_extend_rental_term(rental_term_id)
         if not term or term.state != RentalState.ACTIVE:
             raise BusinessError("Chỉ có thể gia hạn dòng thuê đang hoạt động.")
-        if days != 3:
-            raise BusinessError("Mỗi lần gia hạn chuẩn là 3 ngày.")
         has_waiting_reservation = self.orders_queries.fetch_extend_rental_has_waiting_reservation(term) is not None
-        if term.due_date < date.today() or has_waiting_reservation:
+        if term.due_date < today or has_waiting_reservation:
             self._require_manager(employee_id)
         old_due_date = term.due_date
-        term.due_date += timedelta(days=days)
         copy = term.line.copy
         assert copy is not None
-        price = self._copy_price(copy, LineAction.RENT)
-        self.orders_queries.add_payment_transaction(PaymentTransaction(order_id=term.line.order_id, customer_id=self.orders_queries.get_order(term.line.order_id).customer_id, employee_id=employee_id, method=PaymentMethod.CASH, category='RENTAL_EXTENSION', amount=price))
-        self.orders_queries.add_rental_extension(RentalExtension(rental_term_id=term.id, old_due_date=old_due_date, new_due_date=term.due_date, fee=price, employee_id=employee_id))
-        self._audit(employee_id, "EXTEND_RENTAL", "RentalTerm", term.id, {"days": days, "due_date": str(term.due_date)})
+        new_due_date = new_due_date or old_due_date + timedelta(days=3)
+        if new_due_date <= max(old_due_date, today):
+            raise BusinessError("Ngày trả mới phải sau hạn hiện tại và hôm nay.")
+        price = Decimal(fee) if fee is not None else self._copy_price(copy, LineAction.RENT)
+        if not price.is_finite() or price < 0:
+            raise BusinessError("Phí gia hạn phải là số không âm.")
+        if not isinstance(method, PaymentMethod):
+            raise BusinessError("Phương thức thanh toán không hợp lệ.")
+        late = late_fee(old_due_date, today, Decimal(term.late_daily_rate))
+        customer_id = self.orders_queries.get_order(term.line.order_id).customer_id
+        if late:
+            self.orders_queries.add_penalty_charge(PenaltyCharge(rental_term_id=term.id, kind="LATE", amount=late, reason="Gia hạn quá hạn"))
+            self.orders_queries.add_payment_transaction(PaymentTransaction(order_id=term.line.order_id, customer_id=customer_id, employee_id=employee_id, method=method, category="EXTENSION_LATE", amount=late))
+        if price:
+            self.orders_queries.add_payment_transaction(PaymentTransaction(order_id=term.line.order_id, customer_id=customer_id, employee_id=employee_id, method=method, category="RENTAL_EXTENSION", amount=price))
+        term.due_date = new_due_date
+        self.orders_queries.add_rental_extension(RentalExtension(rental_term_id=term.id, old_due_date=old_due_date, new_due_date=new_due_date, fee=price, employee_id=employee_id))
+        self._audit(employee_id, "EXTEND_RENTAL", "RentalTerm", term.id, {"old_due_date": str(old_due_date), "due_date": str(new_due_date), "fee": str(price), "late": str(late)})
         return term
 
     def rental_to_sale(self, rental_term_id: int, employee_id: int, payment: PaymentInput) -> Order:
@@ -1209,14 +1280,14 @@ class _StoreOperations:
         self._audit(employee_id, "RETURN_SALE", "SaleReturn", line.id, {"refund": str(refund), "condition": condition.value})
         return refund
 
-    def query_inventory(self, status: CopyStatus | None = None, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("title"), text: str = "", item_id: int | None = None, condition: CopyCondition | None = None, media: str = "", rentable: bool = False, sellable: bool = False) -> PagedResult[InventoryCopy]:
-        return self.inventory_queries.query_inventory(status, page_request, sort, text, item_id, condition, media, rentable, sellable)
+    def query_inventory(self, status: CopyStatus | None = None, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("title"), text: str = "", item_id: int | None = None, condition: CopyCondition | None = None, media: str = "", rentable: bool = False, sellable: bool = False, location=("", "", "")) -> PagedResult[InventoryCopy]:
+        return self.inventory_queries.query_inventory(status, page_request, sort, text, item_id, condition, media, rentable, sellable, location)
 
-    def inventory_groups(self, status, text, condition, media, rentable, sellable, page_request, descending=False, item_id=None):
-        return self.inventory_queries.query_groups(status, text, condition, media, rentable, sellable, page_request, descending, item_id)
+    def inventory_groups(self, status, text, condition, media, rentable, sellable, page_request, descending=False, item_id=None, location=("", "", "")):
+        return self.inventory_queries.query_groups(status, text, condition, media, rentable, sellable, page_request, descending, item_id, location)
 
-    def inventory_group_episodes(self, show_id, status, text, condition, media, rentable, sellable, item_id=None):
-        return self.inventory_queries.group_episodes(show_id, status, text, condition, media, rentable, sellable, item_id)
+    def inventory_group_episodes(self, show_id, status, text, condition, media, rentable, sellable, item_id=None, location=("", "", "")):
+        return self.inventory_queries.group_episodes(show_id, status, text, condition, media, rentable, sellable, item_id, location)
 
     def list_inventory(self, status: CopyStatus | None = None, limit: int = 500) -> list[InventoryCopy]:
         return list(self.query_inventory(status, PageRequest(1, limit), SortSpec("barcode")).items)

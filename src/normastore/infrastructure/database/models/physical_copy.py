@@ -31,5 +31,8 @@ class PhysicalCopy(Base, Timestamped):
     sale_price_mode: Mapped[str | None] = mapped_column(String(12))
     rental_price_percent: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
     sale_price_percent: Mapped[Decimal | None] = mapped_column(Numeric(7, 2))
+    aisle: Mapped[str | None] = mapped_column(String(80))
+    rack: Mapped[str | None] = mapped_column(String(80))
+    compartment: Mapped[str | None] = mapped_column(String(80))
     item: Mapped[CatalogItem] = relationship(back_populates="copies")
     __table_args__ = (Index("ix_copy_item_status", "item_id", "status"),)
