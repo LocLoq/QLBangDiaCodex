@@ -169,6 +169,9 @@ class CatalogRow:
     rentable_copies: int
     sellable_copies: int
     show_id: int | None = None
+    show_title: str | None = None
+    season_number: int | None = None
+    episode_number: int | None = None
 
 
 @dataclass(frozen=True)

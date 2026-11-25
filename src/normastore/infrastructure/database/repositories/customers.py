@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import delete, desc, func, select
 
 from normastore.application.contracts import (
     PagedResult,
@@ -11,6 +11,7 @@ from normastore.infrastructure.database.models import (
     Customer,
     PaymentTransaction,
     PremiumMembership,
+    RecommendationCache,
 )
 from normastore.infrastructure.database.repositories.pagination import page_rows
 
@@ -19,8 +20,8 @@ class CustomerQueries:
     def __init__(self, session):
         self.session = session
 
-    def customer(self, customer_id: int):
-        return self.session.get(Customer, customer_id)
+    def customer(self, customer_id: int, *, lock: bool = False):
+        return self.session.get(Customer, customer_id, with_for_update=lock)
 
     def customer_by_phone(self, phone: str):
         return self.session.scalar(select(Customer).where(Customer.phone == phone))
@@ -30,8 +31,7 @@ class CustomerQueries:
             self.session.scalar(
                 select(PremiumMembership.id).where(
                     PremiumMembership.customer_id == customer_id,
-                    PremiumMembership.starts_on <= on_date,
-                    PremiumMembership.ends_on >= on_date,
+                    PremiumMembership.active_on(on_date),
                 )
             )
             is not None
@@ -40,14 +40,27 @@ class CustomerQueries:
     def premium_until(self, customer_id: int, on_date):
         return self.session.scalar(select(func.max(PremiumMembership.ends_on)).where(
             PremiumMembership.customer_id == customer_id,
-            PremiumMembership.starts_on <= on_date,
-            PremiumMembership.ends_on >= on_date,
+            PremiumMembership.active_on(on_date),
         ))
+
+    def active_memberships(self, customer_id: int, on_date):
+        return self.session.scalars(
+            select(PremiumMembership)
+            .where(PremiumMembership.customer_id == customer_id, PremiumMembership.active_on(on_date))
+            .order_by(PremiumMembership.ends_on.desc(), PremiumMembership.id.desc())
+            .with_for_update()
+        ).all()
 
     def save_customer(self, customer: Customer):
         self.session.add(customer)
         self.session.flush()
 
+    def delete_customer(self, customer: Customer):
+        self.session.execute(
+            delete(RecommendationCache).where(RecommendationCache.customer_id == customer.id)
+        )
+        self.session.delete(customer)
+        self.session.flush()
 
     def save_membership(self, membership: PremiumMembership, payment: PaymentTransaction):
         self.session.add_all((membership, payment))
@@ -81,8 +94,7 @@ class CustomerQueries:
     def query_customers_with_premium(self, text, page_request, on_date):
         active = select(PremiumMembership.id).where(
             PremiumMembership.customer_id == Customer.id,
-            PremiumMembership.starts_on <= on_date,
-            PremiumMembership.ends_on >= on_date,
+            PremiumMembership.active_on(on_date),
         ).exists()
         stmt = select(Customer, active).order_by(Customer.full_name, Customer.id)
         if text.strip():

@@ -14,6 +14,7 @@
 - Cọc cơ sở bằng tỷ lệ cấu hình, mặc định 75%, nhân giá bán của đĩa trước khuyến mãi; giảm tiếp 30% cho Premium và làm tròn lên nghìn đồng.
 - Combo cố định cần đủ phim/tập; combo theo bộ cần đủ số tập. Thứ tự giảm là Khám phá theo từng phim, combo, Premium 10% trên phần còn lại, voucher; tổng giảm tối đa 50% tiền hàng. Voucher cần đúng một loại giảm tiền hoặc phần trăm và phải trong thời gian hiệu lực.
 - Premium có kỳ 30/90/365 ngày, giá lần lượt 59.000/159.000/499.000 đồng; kích hoạt ghi giao dịch thanh toán.
+- Quản lý và quản trị viên có thể đổi ngày hết hạn của Premium đang hiệu lực hoặc hủy ngay. Hủy giữ nguyên lịch sử hội viên và thanh toán. Chỉ xóa được hồ sơ khách hàng chưa có lịch sử nghiệp vụ.
 
 ## Trả, gia hạn và đặt trước
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from datetime import datetime
 from tkinter import messagebox, simpledialog, ttk
 
 from ttkbootstrap.constants import BOTH, END, LEFT, RIGHT, X
@@ -34,7 +35,7 @@ class CustomersPageMixin:
             result = self.store.query_customers_with_premium(search.get(), PageRequest(page_number.get(), 50))
             pager(result)
             for customer, premium in result.items:
-                rows[str(customer.id)] = customer
+                rows[str(customer.id)] = (customer, premium)
                 tree.insert(
                     "",
                     END,
@@ -49,6 +50,95 @@ class CustomersPageMixin:
 
         def add_customer():
             self._quick_customer(None)
+
+        def clicked_customer(event):
+            if tree.identify_region(event.x, event.y) not in ("tree", "cell"):
+                return
+            return rows.get(tree.identify_row(event.y))
+
+        def edit_customer(event):
+            clicked = clicked_customer(event)
+            if clicked is not None:
+                self._quick_customer(None, customer=clicked[0])
+                return "break"
+
+        tree.bind("<Double-1>", edit_customer)
+
+        def edit_premium(customer):
+            try:
+                current = self.store.premium_until(customer.id)
+                if current is None:
+                    messagebox.showinfo("Premium", "Khách hàng không có Premium đang hiệu lực.", parent=self)
+                    return
+                entered = simpledialog.askstring(
+                    "Chỉnh hạn Premium",
+                    f"Ngày hết hạn của {customer.full_name} (ngày/tháng/năm):",
+                    initialvalue=f"{current:%d/%m/%Y}", parent=self,
+                )
+                if entered is None:
+                    return
+                try:
+                    new_end = datetime.strptime(entered.strip(), "%d/%m/%Y").date()
+                except ValueError:
+                    messagebox.showerror("Premium", "Nhập ngày theo dạng DD/MM/YYYY.", parent=self)
+                    return
+                self.store.set_premium_end_date(customer.id, new_end, self.account.employee_id)
+                refresh()
+            except Exception as exc:
+                messagebox.showerror("Premium", str(exc), parent=self)
+
+        def cancel_premium(customer):
+            if not messagebox.askyesno(
+                "Hủy Premium",
+                f"Hủy ngay Premium của {customer.full_name}? Thao tác này không hoàn tiền.",
+                parent=self,
+            ):
+                return
+            try:
+                self.store.cancel_premium(customer.id, self.account.employee_id)
+                refresh()
+            except Exception as exc:
+                messagebox.showerror("Premium", str(exc), parent=self)
+
+        def delete_customer(customer):
+            if not messagebox.askyesno(
+                "Xóa khách hàng",
+                f"Xóa vĩnh viễn hồ sơ của {customer.full_name} ({customer.phone})?",
+                parent=self,
+            ):
+                return
+            try:
+                self.store.delete_customer(customer.id, self.account.employee_id)
+                refresh()
+            except Exception as exc:
+                messagebox.showerror("Xóa khách hàng", str(exc), parent=self)
+
+        menu = tk.Menu(tree, tearoff=False)
+
+        def context_menu(event):
+            clicked = clicked_customer(event)
+            if clicked is None:
+                return
+            customer, active = clicked
+            row = str(customer.id)
+            tree.selection_set(row)
+            tree.focus(row)
+            can_manage = self._can_manage()
+            premium_state = "normal" if can_manage and active else "disabled"
+            menu.delete(0, tk.END)
+            menu.add_command(label="Chỉnh hạn Premium", state=premium_state,
+                             command=lambda: edit_premium(customer))
+            menu.add_command(label="Hủy Premium", state=premium_state,
+                             command=lambda: cancel_premium(customer))
+            menu.add_separator()
+            menu.add_command(label="Xóa khách hàng", state="normal" if can_manage else "disabled",
+                             command=lambda: delete_customer(customer))
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+
+        tree.bind("<Button-3>", context_menu)
 
         def premium():
             ids = tree.selection()

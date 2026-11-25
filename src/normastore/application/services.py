@@ -154,7 +154,8 @@ class StoreService:
         "query_orders", "query_active_rentals", "operational_report", "chart_report",
     })
     _MUTATIONS = frozenset({
-        "change_password", "create_employee_account", "add_customer", "activate_premium",
+        "change_password", "create_employee_account", "add_customer", "update_customer", "activate_premium",
+        "set_premium_end_date", "cancel_premium", "delete_customer",
         "create_voucher", "create_fixed_combo", "create_show_episode_combo", "save_catalog_item",
         "create_show", "set_show_poster", "add_episodes_bulk", "add_copy", "save_deposit_percent",
         "update_inventory_copy",
@@ -325,11 +326,23 @@ class StoreService:
     ) -> CustomerView:
         return self._execute("add_customer", full_name, phone, email, actor_id, address=address, email_opt_in=email_opt_in, sms_opt_in=sms_opt_in)
 
+    def update_customer(
+        self, customer_id: int, full_name: str, phone: str, email: str, actor_id: int,
+        *, address: str, email_opt_in: bool, sms_opt_in: bool,
+    ) -> CustomerView:
+        return self._execute(
+            "update_customer", customer_id, full_name, phone, email, actor_id,
+            address=address, email_opt_in=email_opt_in, sms_opt_in=sms_opt_in,
+        )
+
 
     def query_customers(
         self, text: str = "", page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec()
     ) -> PagedResult[CustomerView]:
         return self._execute("query_customers", text, page_request, sort)
+
+    def delete_customer(self, customer_id: int, actor_id: int) -> None:
+        self._execute("delete_customer", customer_id, actor_id)
 
     def list_customers(self, text: str = "") -> list[CustomerView]:
         return self._execute("list_customers", text)
@@ -342,6 +355,12 @@ class StoreService:
 
     def premium_until(self, customer_id: int, on_date: date | None = None) -> date | None:
         return self._execute("premium_until", customer_id, on_date)
+
+    def set_premium_end_date(self, customer_id: int, ends_on: date, actor_id: int) -> None:
+        self._execute("set_premium_end_date", customer_id, ends_on, actor_id)
+
+    def cancel_premium(self, customer_id: int, actor_id: int) -> None:
+        self._execute("cancel_premium", customer_id, actor_id)
 
     def activate_premium(
         self,

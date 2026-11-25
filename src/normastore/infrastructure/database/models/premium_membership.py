@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import Date, ForeignKey, Numeric
+from sqlalchemy import Date, ForeignKey, Numeric, and_, or_
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from normastore.infrastructure.database.base import Base, Timestamped
@@ -16,5 +16,14 @@ class PremiumMembership(Base, Timestamped):
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False)
     starts_on: Mapped[date] = mapped_column(Date, nullable=False)
     ends_on: Mapped[date] = mapped_column(Date, nullable=False)
+    cancelled_on: Mapped[date | None] = mapped_column(Date)
     price_paid: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     customer: Mapped[Customer] = relationship()
+
+    @classmethod
+    def active_on(cls, day: date):
+        return and_(
+            cls.starts_on <= day,
+            cls.ends_on >= day,
+            or_(cls.cancelled_on.is_(None), cls.cancelled_on > day),
+        )

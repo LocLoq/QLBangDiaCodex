@@ -33,7 +33,9 @@ from normastore.infrastructure.database.models import (
     CatalogItem,
     Customer,
     OrderLine,
+    PaymentTransaction,
     PhysicalCopy,
+    PremiumMembership,
     RentalTerm,
     Reservation,
     ReturnReceipt,
@@ -85,6 +87,72 @@ def test_customer_page_includes_premium_state_and_paginated_views(store, session
     rows = (*first.items, *second.items)
     assert all(isinstance(customer, CustomerView) for customer, _ in rows)
     assert {customer.id for customer, active in rows if active} == {customers[1].id}
+
+
+def test_customer_edit_updates_existing_profile_and_refreshes_customer_queries(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    customer = store.add_customer("Khách kiểm tra sửa", "0987123101", "old@example.test")
+    another = store.add_customer("Khách khác", "0987123102")
+    store.activate_premium(customer.id, 30, actor)
+    assert store.query_customers_with_premium(customer.phone).items == ((customer, True),)
+    assert store.list_customers(customer.phone) == [customer]
+
+    changes = dict(full_name=" Khách đã sửa ", email="", address=" Địa chỉ mới ",
+                   email_opt_in=False, sms_opt_in=True)
+    with pytest.raises(BusinessError, match="Số điện thoại đã tồn tại"):
+        store.update_customer(customer.id, phone=another.phone, actor_id=actor, **changes)
+    assert store.list_customers(customer.phone) == [customer]
+
+    updated = store.update_customer(customer.id, phone=customer.phone, actor_id=actor, **changes)
+    assert updated == CustomerView(
+        customer.id, "Khách đã sửa", customer.phone, None, "Địa chỉ mới", False, True,
+    )
+    assert store.query_customers_with_premium(customer.phone).items == ((updated, True),)
+    assert store.list_customers(customer.phone) == [updated]
+    assert session.scalar(select(AuditLog).where(
+        AuditLog.entity_id == str(customer.id), AuditLog.action == "UPDATE_CUSTOMER",
+    )).actor_id == actor
+
+
+def test_edit_and_cancel_premium_preserve_memberships_and_payments(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    customer = store.add_customer("Khách chỉnh Premium", "0987123103")
+    store.activate_premium(customer.id, 30, actor)
+    store.activate_premium(customer.id, 90, actor)
+    today = date.today()
+    assert store.premium_until(customer.id) == today + timedelta(days=89)
+    with pytest.raises(BusinessError, match="trước hôm nay"):
+        store.set_premium_end_date(customer.id, today - timedelta(days=1), actor)
+
+    new_end = today + timedelta(days=17)
+    store.set_premium_end_date(customer.id, new_end, actor)
+    assert store.premium_until(customer.id) == new_end
+    assert store.premium_active(customer.id, new_end)
+    assert not store.premium_active(customer.id, new_end + timedelta(days=1))
+
+    store.cancel_premium(customer.id, actor)
+    assert store.premium_until(customer.id) is None
+    assert store.query_customers_with_premium(customer.phone).items == ((customer, False),)
+    rows = session.scalars(select(PremiumMembership).filter_by(customer_id=customer.id)).all()
+    assert len(rows) == 2
+    assert all(row.cancelled_on == today and row.ends_on == new_end for row in rows)
+    payments = session.scalars(select(PaymentTransaction).filter_by(customer_id=customer.id)).all()
+    assert sorted(payment.amount for payment in payments) == [Decimal("59000"), Decimal("159000")]
+
+
+def test_delete_customer_keeps_history_and_removes_unused_profile(store):
+    actor = store.authenticate("admin", "admin123").employee_id
+    protected = store.add_customer("Khách có lịch sử Premium", "0987123104")
+    empty = store.add_customer("Khách chưa giao dịch", "0987123105")
+    store.activate_premium(protected.id, 30, actor)
+    store.cancel_premium(protected.id, actor)
+    assert store.list_customers(empty.phone) == [empty]
+
+    with pytest.raises(BusinessError, match="đã có lịch sử"):
+        store.delete_customer(protected.id, actor)
+    assert store.list_customers(protected.phone) == [protected]
+    store.delete_customer(empty.id, actor)
+    assert store.list_customers(empty.phone) == []
 
 
 def test_preorder_is_allocated_before_checkout_even_when_worker_has_not_run(store, session):

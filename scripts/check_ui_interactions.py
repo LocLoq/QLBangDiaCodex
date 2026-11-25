@@ -42,6 +42,14 @@ def button(root, text):
     return next(w for w in widgets(root) if isinstance(w, ttk.Button) and w.cget("text") == text)
 
 
+def fill_entry(root, label_text, value):
+    label = next(w for w in widgets(root) if isinstance(w, ttk.Label) and w.cget("text") == label_text)
+    siblings = label.master.winfo_children()
+    entry = siblings[siblings.index(label) + 1]
+    entry.delete(0, tk.END)
+    entry.insert(0, value)
+
+
 def main():
     url = os.environ.get("NORMASTORE_DATABASE_URL", "")
     if not url or not (make_url(url).database or "").startswith("normastore_ui_smoke_"):
@@ -67,7 +75,9 @@ def main():
     service.create_voucher("UI10", actor, percent_off=Decimal("10"))
     future = service.save_catalog_item(actor, item_type="MOVIE", title="Phim sắp ra thử",
                                        release_date=date.today() + timedelta(days=7))
-    show = service.create_show("Bộ phim thử giao diện", actor_id=actor)
+    show_title = "Bộ phim thử giao diện"
+    show = service.create_show(show_title, actor_id=actor)
+    service.create_show("ZZ Phim bộ ngoài kết quả thử", actor_id=actor)
     episodes = service.add_episodes_bulk(show.id, 1, 1, 3, actor_id=actor)
     for number, episode in enumerate(episodes, 1):
         service.save_catalog_item(actor, id=episode.id, genre_names=["Thể loại thử"])
@@ -288,6 +298,12 @@ def main():
         pump()
         dialog = next(w for w in app.winfo_children() if isinstance(w, tk.Toplevel) and w.title() == "Chọn tập phim bộ")
         assert not _visible_overflow(app, dialog), "Cửa sổ chọn tập bị tràn nội dung."
+        show_picker = next(w for w in widgets(dialog) if isinstance(w, ttk.Combobox))
+        assert len(show_picker.cget("values")) >= 2
+        fill_entry(dialog, "Tìm phim bộ:", "khong co phim bo nay")
+        assert not show_picker.get() and not show_picker.cget("values")
+        fill_entry(dialog, "Tìm phim bộ:", "bo phim thu giao dien")
+        assert len(show_picker.cget("values")) == 1 and show_title in show_picker.get()
         controls = next(w for w in widgets(dialog) if isinstance(w, ttk.Frame) and
                         any(isinstance(c, ttk.Label) and c.cget("text") == "Từ tập" for c in w.winfo_children()))
         entries = [w for w in controls.winfo_children() if w.winfo_class() == "TEntry"]
@@ -567,9 +583,106 @@ def main():
         assert "Xem chi tiết bộ phim" in labels
         details = next(w for w in app.winfo_children() if isinstance(w, tk.Toplevel) and w.title() == "Chi tiết phim / tập")
         details.destroy()
+        print("DASHBOARD_STOCK_DISCOVERY_RANDOM_PREORDER_OK", flush=True)
+
+        app.show_page("Khách hàng & Premium", app.customers_page)
+        pump()
+        customers_page = app.pages["Khách hàng & Premium"]
+        customers_tree = next(w for w in widgets(customers_page) if isinstance(w, ttk.Treeview))
+        customer_row = str(customer.id)
+        customers_tree.see(customer_row)
+        pump()
+        x, y, _width, height = customers_tree.bbox(customer_row, "phone")
+        for at in (1000, 1100):
+            customers_tree.event_generate("<ButtonPress-1>", x=x + 4, y=y + height // 2, time=at)
+            customers_tree.event_generate("<ButtonRelease-1>", x=x + 4, y=y + height // 2, time=at + 10)
+        edit_dialog = next(w for w in app.winfo_children()
+                           if isinstance(w, tk.Toplevel) and w.title() == "Sửa khách hàng")
+        name, phone, email, address = [w for w in widgets(edit_dialog) if isinstance(w, ttk.Entry)]
+        assert (name.get(), phone.get(), email.get(), address.get()) == (
+            customer.full_name, customer.phone, customer.email, customer.address,
+        )
+        name.delete(0, tk.END)
+        name.insert(0, "Khách đã sửa qua bảng")
+        button(edit_dialog, "Lưu khách hàng").invoke()
+        assert not edit_dialog.winfo_exists()
+        assert customers_tree.item(customer_row, "text") == "Khách đã sửa qua bảng"
+        assert service.list_customers(customer.phone)[0].id == customer.id
+        print("CUSTOMER_DOUBLE_CLICK_EDIT_OK", flush=True)
+
+        def invoke_customer_action(customer_id, label):
+            row = str(customer_id)
+            customers_tree.see(row)
+            app.update_idletasks()
+            x, y, _width, height = customers_tree.bbox(row, "phone")
+            original_popup = tk.Menu.tk_popup
+            tk.Menu.tk_popup = lambda menu, *_args: menu.invoke(label)
+            try:
+                customers_tree.event_generate("<Button-3>", x=x + 4, y=y + height // 2)
+            finally:
+                tk.Menu.tk_popup = original_popup
+
+        service.activate_premium(customer.id, 30, actor)
+        customers_page.refresh()
+        new_end = date.today() + timedelta(days=12)
+        simpledialog.askstring = lambda *_args, **_kwargs: f"{new_end:%d/%m/%Y}"
+        invoke_customer_action(customer.id, "Chỉnh hạn Premium")
+        assert service.premium_until(customer.id) == new_end
+        messagebox.askyesno = lambda *_args, **_kwargs: True
+        invoke_customer_action(customer.id, "Hủy Premium")
+        assert not service.premium_active(customer.id)
+        assert customers_tree.set(customer_row, "premium") == "Thường"
+        unused = service.add_customer("Khách chưa có lịch sử", "0988999001")
+        customers_page.refresh()
+        messagebox.askyesno = lambda *_args, **_kwargs: False
+        invoke_customer_action(unused.id, "Xóa khách hàng")
+        assert customers_tree.exists(str(unused.id))
+        messagebox.askyesno = lambda *_args, **_kwargs: True
+        invoke_customer_action(unused.id, "Xóa khách hàng")
+        assert not customers_tree.exists(str(unused.id))
+        assert service.list_customers(unused.phone) == []
+        print("CUSTOMER_CONTEXT_ACTIONS_OK", flush=True)
+
+        app.show_page("Combo / Voucher", app.promotions_page)
+        promotions = app.pages["Combo / Voucher"]
+        button(promotions, "Tạo combo cố định").invoke()
+        fixed_dialog = next(w for w in app.winfo_children()
+                            if isinstance(w, tk.Toplevel) and w.title() == "Tạo combo cố định")
+        pump()
+        assert not _visible_overflow(app, fixed_dialog), "Cửa sổ tạo combo cố định bị tràn nội dung."
+        results, chosen = [w for w in widgets(fixed_dialog) if isinstance(w, ttk.Treeview)]
+        fill_entry(fixed_dialog, "Tìm phim hoặc tập:", "Phim sắp ra thử")
+        button(fixed_dialog, "Tìm").invoke()
+        assert results.get_children() == (str(future.id),)
+        results.selection_set(str(future.id))
+        button(fixed_dialog, "Thêm vào combo").invoke()
+        fill_entry(fixed_dialog, "Tìm phim hoặc tập:", show_title)
+        button(fixed_dialog, "Tìm").invoke()
+        assert results.set(str(episodes[0].id), "detail") == f"{show_title} • Mùa 1, tập 1"
+        results.selection_set(str(episodes[0].id))
+        button(fixed_dialog, "Thêm vào combo").invoke()
+        assert chosen.get_children() == (str(future.id), str(episodes[0].id))
+        fill_entry(fixed_dialog, "Tên combo:", "Combo cố định thử giao diện")
+        fill_entry(fixed_dialog, "Số tiền giảm (đ):", "10000")
+        button(fixed_dialog, "Lưu combo").invoke()
+        assert not fixed_dialog.winfo_exists()
+        assert any(row.name == "Combo cố định thử giao diện" and row.rule_type == "FIXED"
+                   for row in service.list_combos())
+
+        button(promotions, "Tạo combo N tập cùng bộ").invoke()
+        episode_dialog = next(w for w in app.winfo_children()
+                              if isinstance(w, tk.Toplevel) and w.title() == "Tạo combo N tập cùng bộ")
+        fill_entry(episode_dialog, "Tên combo:", "Combo phim bộ thử giao diện")
+        fill_entry(episode_dialog, "Số tiền giảm (đ):", "15000")
+        fill_entry(episode_dialog, "Tìm phim bộ:", "bo phim thu giao dien")
+        button(episode_dialog, "Lưu combo").invoke()
+        assert not episode_dialog.winfo_exists()
+        episode_combo = next(row for row in service.list_combos() if row.name == "Combo phim bộ thử giao diện")
+        assert (episode_combo.scope, episode_combo.required_count) == (show_title, 2)
+        print("COMBO_SEARCH_AND_SELECTION_OK", flush=True)
+
         assert not background_variables, f"Biến giao diện bị giải phóng ở luồng nền: {background_variables}"
         assert not callback_errors, f"Lỗi callback giao diện: {callback_errors}"
-        print("DASHBOARD_STOCK_DISCOVERY_RANDOM_PREORDER_OK", flush=True)
     finally:
         app._close()
     return 0

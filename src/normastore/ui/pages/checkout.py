@@ -522,13 +522,11 @@ class CheckoutPageMixin:
             dialog = self._dialog("Chọn tập phim bộ", 850, 650)
             frame = ttk.Frame(dialog, padding=12)
             frame.pack(fill=BOTH, expand=True)
-            show_map = {f"{show.show_id} — {show.title}": show.show_id for show in shows}
-            initial = next((name for name, show_id in show_map.items() if show_id == initial_show_id), next(iter(show_map)))
-            show_var = tk.StringVar(value=initial)
+            show_var = tk.StringVar()
             season_var = tk.StringVar()
             first_var, last_var = tk.StringVar(), tk.StringVar()
-            ttk.Label(frame, text="Bộ phim").pack(anchor="w")
-            ttk.Combobox(frame, textvariable=show_var, values=tuple(show_map), state="readonly").pack(fill=X)
+            initial = next((show.show_id for show in shows if show.show_id == initial_show_id), shows[0].show_id)
+            show_map = self._searchable_show_picker(frame, shows, show_var, initial)
             controls = ttk.Frame(frame)
             controls.pack(fill=X, pady=8)
             ttk.Label(controls, text="Mùa").pack(side=LEFT)
@@ -547,7 +545,8 @@ class CheckoutPageMixin:
             current = {"action": None}
 
             def load_seasons(*_args):
-                episodes = self.store.list_show_episodes(show_map[show_var.get()])
+                show_id = show_map.get(show_var.get())
+                episodes = self.store.list_show_episodes(show_id) if show_id is not None else ()
                 seasons = sorted({episode.season_number for episode in episodes})
                 season_combo.configure(values=seasons)
                 season_var.set(str(seasons[0]) if seasons else "")
@@ -561,6 +560,8 @@ class CheckoutPageMixin:
 
             def prepare(action):
                 clear_choices()
+                if not show_var.get() or not season_var.get():
+                    return messagebox.showinfo("Phim bộ", "Hãy chọn bộ phim và mùa có tập.", parent=dialog)
                 try:
                     start = int(first_var.get()) if first_var.get().strip() else None
                     end = int(last_var.get()) if last_var.get().strip() else None

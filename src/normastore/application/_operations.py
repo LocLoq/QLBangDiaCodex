@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 
 from argon2 import PasswordHasher
+from sqlalchemy.exc import IntegrityError
 
 
 from normastore.application.contracts import (
@@ -236,6 +237,48 @@ class _StoreOperations:
         self._audit(actor_id, "CREATE_CUSTOMER", "Customer", customer.id, {"phone": customer.phone})
         return customer
 
+    def update_customer(
+        self, customer_id: int, full_name: str, phone: str, email: str, actor_id: int,
+        *, address: str, email_opt_in: bool, sms_opt_in: bool,
+    ) -> Customer:
+        customer = self.customers_queries.customer(customer_id)
+        if customer is None:
+            raise BusinessError("Không tìm thấy khách hàng.")
+        full_name, phone, email, address = (
+            full_name.strip(), phone.strip(), email.strip(), address.strip()
+        )
+        if not full_name or not phone:
+            raise BusinessError("Tên và số điện thoại là bắt buộc.")
+        if len(full_name) > 160 or len(phone) > 30 or len(email) > 255 or len(address) > 255:
+            raise BusinessError("Họ tên tối đa 160 ký tự, số điện thoại 30, email và địa chỉ 255.")
+        existing = self.customers_queries.customer_by_phone(phone)
+        if existing is not None and existing.id != customer_id:
+            raise BusinessError("Số điện thoại đã tồn tại.")
+        customer.full_name = full_name
+        customer.phone = phone
+        customer.email = email or None
+        customer.address = address or None
+        customer.email_opt_in = email_opt_in
+        customer.sms_opt_in = sms_opt_in
+        self.customers_queries.save_customer(customer)
+        self._audit(actor_id, "UPDATE_CUSTOMER", "Customer", customer.id)
+        return customer
+
+    def delete_customer(self, customer_id: int, actor_id: int) -> None:
+        self._require_manager(actor_id)
+        customer = self.customers_queries.customer(customer_id, lock=True)
+        if customer is None:
+            raise BusinessError("Không tìm thấy khách hàng.")
+        try:
+            self.customers_queries.delete_customer(customer)
+        except IntegrityError as exc:
+            if exc.orig.args and exc.orig.args[0] == 1451:
+                raise BusinessError(
+                    "Khách hàng đã có lịch sử nghiệp vụ nên không thể xóa."
+                ) from exc
+            raise
+        self._audit(actor_id, "DELETE_CUSTOMER", "Customer", customer_id)
+
 
     def query_customers(self, text: str = "", page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec()) -> PagedResult[Customer]:
         return self.customers_queries.query_customers(text, page_request, sort)
@@ -253,6 +296,38 @@ class _StoreOperations:
     def premium_until(self, customer_id: int, on_date: date | None = None) -> date | None:
         return self.customers_queries.premium_until(customer_id, on_date or date.today())
 
+    def _active_memberships_for_edit(self, customer_id: int, actor_id: int, today: date):
+        self._require_manager(actor_id)
+        if self.customers_queries.customer(customer_id, lock=True) is None:
+            raise BusinessError("Không tìm thấy khách hàng.")
+        memberships = self.customers_queries.active_memberships(customer_id, today)
+        if not memberships:
+            raise BusinessError("Khách hàng không có Premium đang hiệu lực.")
+        return memberships
+
+    def set_premium_end_date(self, customer_id: int, ends_on: date, actor_id: int) -> None:
+        today = date.today()
+        if ends_on < today:
+            raise BusinessError("Ngày hết hạn không được trước hôm nay.")
+        current, *overlapping = self._active_memberships_for_edit(customer_id, actor_id, today)
+        before = current.ends_on
+        current.ends_on = ends_on
+        for membership in overlapping:
+            membership.ends_on = min(membership.ends_on, ends_on)
+        self._audit(actor_id, "UPDATE_PREMIUM_END", "Customer", customer_id, {
+            "before": before.isoformat(), "after": ends_on.isoformat(),
+        })
+
+    def cancel_premium(self, customer_id: int, actor_id: int) -> None:
+        today = date.today()
+        memberships = self._active_memberships_for_edit(customer_id, actor_id, today)
+        for membership in memberships:
+            membership.cancelled_on = today
+        self._audit(actor_id, "CANCEL_PREMIUM", "Customer", customer_id, {
+            "membership_ids": [membership.id for membership in memberships],
+            "cancelled_on": today.isoformat(),
+        })
+
     def activate_premium(
         self,
         customer_id: int,
@@ -263,7 +338,7 @@ class _StoreOperations:
         prices = {30: Decimal("59000"), 90: Decimal("159000"), 365: Decimal("499000")}
         if days not in prices:
             raise BusinessError("Premium chỉ có kỳ hạn 30, 90 hoặc 365 ngày.")
-        if not self.customers_queries.customer(customer_id):
+        if not self.customers_queries.customer(customer_id, lock=True):
             raise BusinessError("Không tìm thấy khách hàng.")
         membership = PremiumMembership(
             customer_id=customer_id, starts_on=date.today(), ends_on=date.today() + timedelta(days=days - 1),

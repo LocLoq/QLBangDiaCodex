@@ -164,12 +164,12 @@ class ReportingRepository:
     def premium_counts(self, today):
         active = self.session.scalar(
             select(func.count(func.distinct(PremiumMembership.customer_id))).where(
-                PremiumMembership.starts_on <= today, PremiumMembership.ends_on >= today
+                PremiumMembership.active_on(today)
             )
         )
         expired = self.session.scalar(
             select(func.count(func.distinct(PremiumMembership.customer_id))).where(
-                PremiumMembership.ends_on < today
+                PremiumMembership.ends_on < today, PremiumMembership.cancelled_on.is_(None)
             )
         )
         return active, expired

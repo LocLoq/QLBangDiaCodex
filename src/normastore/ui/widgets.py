@@ -3,14 +3,48 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Callable
+from unicodedata import combining, normalize
 
 import ttkbootstrap as tb
 from ttkbootstrap.constants import LEFT, RIGHT, X
 
+from normastore.application.contracts import CustomerView, ShowSummary
 from normastore.domain.enums import PaymentMethod
 
 
 class CommonWidgetsMixin:
+    def _searchable_show_picker(
+        self, parent, shows: list[ShowSummary], selected: tk.StringVar,
+        initial_show_id: int | None = None,
+    ) -> dict[str, int]:
+        def search_key(value: str) -> str:
+            value = value.casefold().replace("đ", "d")
+            return "".join(char for char in normalize("NFD", value) if not combining(char))
+
+        show_ids = {f"{show.title} (#{show.show_id})": show.show_id for show in shows}
+        titles = {label: search_key(show.title) for label, show in zip(show_ids, shows)}
+        search = tk.StringVar()
+        ttk.Label(parent, text="Tìm phim bộ:").pack(anchor="w")
+        ttk.Entry(parent, textvariable=search).pack(fill=X, pady=(0, 4))
+        caption = ttk.Label(parent, text="Bộ phim")
+        caption.pack(anchor="w")
+        combo = ttk.Combobox(parent, textvariable=selected, values=tuple(show_ids), state="readonly")
+        combo.pack(fill=X)
+        selected.set(next((label for label, key in show_ids.items() if key == initial_show_id), ""))
+
+        def filter_shows(*_args):
+            term = search_key(search.get().strip())
+            matches = tuple(label for label, title in titles.items() if term in title)
+            combo.configure(values=matches, state="readonly" if matches else "disabled")
+            caption.configure(text="Bộ phim" if matches else "Không tìm thấy phim bộ.")
+            if selected.get() not in matches:
+                replacement = matches[0] if len(matches) == 1 else ""
+                if selected.get() != replacement:
+                    selected.set(replacement)
+
+        search.trace_add("write", filter_shows)
+        return show_ids
+
     def _open_catalog_details(self, item_id: int, parent=None) -> None:
         from normastore.ui.formatting import vnd
 
@@ -160,31 +194,41 @@ class CommonWidgetsMixin:
         self.wait_window(dialog)
         return selected[0] if selected else None
 
-    def _quick_customer(self, combo) -> None:
-        dialog = self._dialog("Thêm khách hàng", 540, 440)
+    def _quick_customer(self, combo, *, customer: CustomerView | None = None) -> None:
+        dialog = self._dialog("Sửa khách hàng" if customer else "Thêm khách hàng", 540, 440)
         form = ttk.Frame(dialog, padding=14)
         form.pack(fill="both", expand=True)
-        values = {key: tk.StringVar() for key in ("name", "phone", "email", "address")}
-        for label, key in (("Họ tên", "name"), ("Số điện thoại", "phone"), ("Email", "email"), ("Địa chỉ", "address")):
+        values = {}
+        for label, key in (("Họ tên", "full_name"), ("Số điện thoại", "phone"), ("Email", "email"), ("Địa chỉ", "address")):
+            values[key] = tk.StringVar(value=getattr(customer, key, None) or "")
             ttk.Label(form, text=label).pack(anchor="w")
             ttk.Entry(form, textvariable=values[key]).pack(fill=X, pady=(0, 7))
-        email_opt_in, sms_opt_in = tk.BooleanVar(value=True), tk.BooleanVar(value=True)
+        email_opt_in = tk.BooleanVar(value=customer.email_opt_in if customer else True)
+        sms_opt_in = tk.BooleanVar(value=customer.sms_opt_in if customer else True)
         ttk.Checkbutton(form, text="Đồng ý nhận email", variable=email_opt_in).pack(anchor="w")
         ttk.Checkbutton(form, text="Đồng ý nhận SMS", variable=sms_opt_in).pack(anchor="w")
 
         def save():
+            details = {key: variable.get() for key, variable in values.items()}
+            details["email_opt_in"] = email_opt_in.get()
+            details["sms_opt_in"] = sms_opt_in.get()
             try:
-                customer = self.store.add_customer(values["name"].get(), values["phone"].get(), values["email"].get(), self.account.employee_id if self.account else None, address=values["address"].get(), email_opt_in=email_opt_in.get(), sms_opt_in=sms_opt_in.get())
-                dialog.destroy()
-                page = self.pages.get(self._active_page)
-                refresh = getattr(page, "refresh", None) if page else None
-                if refresh:
-                    refresh()
-                if combo is not None:
-                    match = next((value for value in combo.cget("values") if str(value).startswith(f"{customer.id} — ")), None)
-                    if match:
-                        combo.set(match)
+                if customer is None:
+                    actor_id = self.account.employee_id if self.account else None
+                    saved = self.store.add_customer(actor_id=actor_id, **details)
+                else:
+                    saved = self.store.update_customer(customer.id, actor_id=self.account.employee_id, **details)
             except Exception as exc:
                 messagebox.showerror("Khách hàng", str(exc), parent=dialog)
+                return
+            dialog.destroy()
+            page = self.pages.get(self._active_page)
+            refresh = getattr(page, "refresh", None) if page else None
+            if refresh:
+                refresh()
+            if combo is not None:
+                match = next((value for value in combo.cget("values") if str(value).startswith(f"{saved.id} — ")), None)
+                if match:
+                    combo.set(match)
 
         ttk.Button(form, text="Lưu khách hàng", command=save, bootstyle="primary").pack(anchor="e", pady=10)

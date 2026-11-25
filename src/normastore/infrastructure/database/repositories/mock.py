@@ -73,7 +73,7 @@ class MockQueries:
     def fetch_ensure_mock_fixtures_active(self, today):
         return self.session.scalars(
             select(PremiumMembership.customer_id).where(
-                PremiumMembership.starts_on <= today, PremiumMembership.ends_on >= today
+                PremiumMembership.active_on(today)
             )
         )
 
@@ -124,8 +124,7 @@ class MockQueries:
     def fetch_seed_mock_day_premium_ids(self, business_date):
         return self.session.scalars(
             select(PremiumMembership.customer_id).where(
-                PremiumMembership.starts_on <= business_date,
-                PremiumMembership.ends_on >= business_date,
+                PremiumMembership.active_on(business_date)
             )
         )
 

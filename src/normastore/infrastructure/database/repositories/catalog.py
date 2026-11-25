@@ -4,7 +4,7 @@ from decimal import Decimal
 from datetime import date, datetime, timezone
 
 from sqlalchemy import and_, case, desc, func, or_, select
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from normastore.application.contracts import (
     CatalogFilters,
@@ -270,7 +270,8 @@ class CatalogQueries:
         total_pages = max(1, (total_items + page_size - 1) // page_size)
         page = min(max(1, page_request.page), total_pages)
         rows = self.session.execute(
-            stmt.order_by(ordering, CatalogItem.id).offset((page - 1) * page_size).limit(page_size)
+            stmt.options(selectinload(CatalogItem.show), selectinload(CatalogItem.season))
+            .order_by(ordering, CatalogItem.id).offset((page - 1) * page_size).limit(page_size)
         ).all()
         return PagedResult(
             items=tuple(
@@ -288,6 +289,9 @@ class CatalogQueries:
                     rentable_copies=int(rent_count or 0),
                     sellable_copies=int(sell_count or 0),
                     show_id=item.show_id,
+                    show_title=item.show.title if item.show else None,
+                    season_number=item.season.season_number if item.season else None,
+                    episode_number=item.episode_number,
                 )
                 for item, copies, rent_count, sell_count in rows
             ),
