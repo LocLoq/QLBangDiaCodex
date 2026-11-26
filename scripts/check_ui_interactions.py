@@ -177,21 +177,23 @@ def main():
         assert sale_choice.unit_price == Decimal("65000")
         print("INVENTORY_CONDITION_AND_PRICE_EDIT_OK", flush=True)
 
+        confirmations = []
+        messagebox.showinfo = lambda title, message, **_kwargs: confirmations.append((title, message))
+        existing_barcodes = {copy.barcode for copy in service.checkout_copies(episodes[2].id, LineAction.BUY)}
         button(page, "Thêm đĩa").invoke()
         pump()
         add_dialog = next(w for w in app.winfo_children() if isinstance(w, tk.Toplevel) and w.title() == "Thêm đĩa vào kho")
         item_tree = next(w for w in widgets(add_dialog) if isinstance(w, ttk.Treeview))
         item_tree.selection_set(str(episodes[2].id))
-        add_entries = [w for w in widgets(add_dialog) if w.winfo_class() == "TEntry"]
-        add_entries[1].insert(0, "UI-EP-3-B")
         button(add_dialog, "Thêm đĩa").invoke()
         pump()
         assert not add_dialog.winfo_exists(), "Không lưu được đĩa mới."
-        assert any(copy.barcode == "UI-EP-3-B" for copy in service.query_inventory(text="UI-EP-3-B").items)
+        current_barcodes = {copy.barcode for copy in service.checkout_copies(episodes[2].id, LineAction.BUY)}
+        added_barcode, = current_barcodes - existing_barcodes
+        assert added_barcode.startswith("DIA-")
+        assert any(title == "Nhập kho" and added_barcode in text for title, text in confirmations)
         print("INVENTORY_ADD_COPY_OK", flush=True)
 
-        confirmations = []
-        messagebox.showinfo = lambda title, message, **_kwargs: confirmations.append((title, message))
         app.show_page("Cài đặt & Giới thiệu", app.settings_page)
         pump()
         settings_page = app.pages["Cài đặt & Giới thiệu"]
@@ -317,6 +319,10 @@ def main():
                    any("UI-EP-2-B" in str(value) for value in w.cget("values"))]
         assert len(choices) == 1, "Không có lựa chọn đĩa cho tập 2."
         choices[0].set(next(value for value in choices[0].cget("values") if "UI-EP-2-B" in value))
+        episode_three_picker = next(w for w in widgets(dialog) if isinstance(w, ttk.Combobox)
+                                    and any("UI-EP-3-A" in str(value) for value in w.cget("values")))
+        episode_three_picker.set(next(value for value in episode_three_picker.cget("values")
+                                      if "UI-EP-3-A" in value))
         button(dialog, "Thêm vào giỏ").invoke()
         pump()
         carts = [w for w in widgets(page) if isinstance(w, ttk.Treeview) and
@@ -334,7 +340,7 @@ def main():
         button(dialog, "Thêm vào giỏ").invoke()
         pump()
         texts = [carts[0].item(i, "text") for i in carts[0].get_children()]
-        assert len(texts) == 5 and any("UI-EP-3-B" in text for text in texts)
+        assert len(texts) == 5 and any(added_barcode in text for text in texts)
         print("SERIES_FULL_SEASON_PURCHASE_OK", flush=True)
 
         confirmations.clear()
@@ -356,7 +362,7 @@ def main():
                    for discount in receipt.discounts)
         assert receipt.checkout_paid == receipt.total_due and receipt.balance_due == 0
         assert service.query_inventory(text="UI-EP-2-B").items[0].status == CopyStatus.RENTED
-        assert service.query_inventory(text="UI-EP-3-B").items[0].status == CopyStatus.SOLD
+        assert service.query_inventory(text=added_barcode).items[0].status == CopyStatus.SOLD
         print("CHECKOUT_PAYMENT_AND_ORDER_OK", flush=True)
 
         app.show_page("Đĩa đã được thuê", app.returns_page)
@@ -399,12 +405,12 @@ def main():
         pump()
         sale_dialog = next(w for w in app.winfo_children() if isinstance(w, tk.Toplevel) and w.title() == "Trả hàng bán trong 7 ngày")
         sale_tree = next(w for w in widgets(sale_dialog) if isinstance(w, ttk.Treeview))
-        sale_line = next(row for row in service.returnable_sales() if row.barcode == "UI-EP-3-B")
+        sale_line = next(row for row in service.returnable_sales() if row.barcode == added_barcode)
         sale_tree.selection_set(str(sale_line.line_id))
         messagebox.askyesno = lambda *_args, **_kwargs: False
         button(sale_dialog, "Xác nhận hoàn").invoke()
         pump()
-        assert service.query_inventory(text="UI-EP-3-B").items[0].status == CopyStatus.INSPECTION
+        assert service.query_inventory(text=added_barcode).items[0].status == CopyStatus.INSPECTION
         assert not sale_tree.exists(str(sale_line.line_id))
         sale_dialog.destroy()
         print("RENTAL_AND_SALE_RETURN_OK", flush=True)
@@ -584,20 +590,39 @@ def main():
         pump()
         assert any(row.item_title == "Phim sắp ra thử" and row.customer_name == "Khách thử giao diện"
                    for row in service.list_reservations())
+        service.add_copy(episodes[0].id, "UI-CANCEL-PREORDER", actor_id=actor)
         service.reserve(customer.id, [episodes[0].id], actor)
+        waiting_customer = service.add_customer("Khách chờ hủy cùng", "0988999011")
+        service.reserve(waiting_customer.id, [episodes[0].id], actor)
         app.show_page("Đặt trước", app.reservations_page)
         pump()
-        reservation_tree = next(w for w in widgets(app.pages["Đặt trước"]) if isinstance(w, ttk.Treeview))
+        reservations_page = app.pages["Đặt trước"]
+        reservation_tree = next(w for w in widgets(reservations_page) if isinstance(w, ttk.Treeview))
+        fill_entry(reservations_page, "Tìm tên khách hoặc phim:", "Khách chờ hủy")
+        pump()
+        assert [reservation_tree.set(row, "customer") for row in reservation_tree.get_children()] == [waiting_customer.full_name]
+        fill_entry(reservations_page, "Tìm tên khách hoặc phim:", show_title)
+        pump()
+        assert len(reservation_tree.get_children()) == 2
+        fill_entry(reservations_page, "Tìm tên khách hoặc phim:", "")
+        pump()
+        assert len(reservation_tree.get_children()) > 2
+        print("RESERVATION_SEARCH_OK", flush=True)
         reserved_episode = next(row for row in service.list_reservations() if row.item_id == episodes[0].id)
-        reservation_row = next(i for i in reservation_tree.get_children()
-                               if reservation_tree.item(i, "values")[1] == reserved_episode.item_title)
+        episode_rows = {
+            reservation_tree.set(i, "customer"): i for i in reservation_tree.get_children()
+            if reservation_tree.set(i, "item") == reserved_episode.item_title
+        }
+        reservation_row = episode_rows[customer.full_name]
+        waiting_row = episode_rows[waiting_customer.full_name]
         reservation_tree.see(reservation_row)
         pump()
         x, y, _width, height = reservation_tree.bbox(reservation_row)
         labels = []
         original_popup = tk.Menu.tk_popup
         def invoke_detail(menu, *_args):
-            labels.extend(menu.entrycget(i, "label") for i in range(menu.index("end") + 1))
+            labels.extend(menu.entrycget(i, "label") for i in range(menu.index("end") + 1)
+                          if menu.type(i) == "command")
             menu.invoke("Xem chi tiết phim / tập")
         tk.Menu.tk_popup = invoke_detail
         try:
@@ -606,9 +631,33 @@ def main():
             tk.Menu.tk_popup = original_popup
         pump()
         assert "Xem chi tiết bộ phim" in labels
+        assert "Hủy đặt trước" in labels
         details = next(w for w in app.winfo_children() if isinstance(w, tk.Toplevel) and w.title() == "Chi tiết phim / tập")
         details.destroy()
         print("DASHBOARD_STOCK_DISCOVERY_RANDOM_PREORDER_OK", flush=True)
+        cancel_button = button(app.pages["Đặt trước"], "Hủy đặt trước")
+        reservation_tree.selection_set(reservation_row, waiting_row)
+        pump()
+        assert not cancel_button.instate(["disabled"])
+        messagebox.askyesno = lambda *_args, **_kwargs: False
+        cancel_button.invoke()
+        assert reservation_tree.item(reservation_row, "values")[2] == "Đang giữ"
+        assert reservation_tree.item(waiting_row, "values")[2] == "Đang chờ"
+        messagebox.askyesno = lambda *_args, **_kwargs: True
+        tk.Menu.tk_popup = lambda menu, *_args: menu.invoke("Hủy đặt trước")
+        try:
+            reservation_tree.event_generate("<Button-3>", x=x + 4, y=y + height // 2)
+        finally:
+            tk.Menu.tk_popup = original_popup
+        cancelled_rows = [i for i in reservation_tree.get_children()
+                          if reservation_tree.set(i, "item") == reserved_episode.item_title]
+        assert len(cancelled_rows) == 2
+        assert all(reservation_tree.item(row, "values")[2:] == ("Đã hủy", "—") for row in cancelled_rows)
+        reservation_tree.selection_set(cancelled_rows)
+        pump()
+        assert cancel_button.instate(["disabled"])
+        assert not service.customer_preorder_copies(customer.id)
+        print("RESERVATION_CANCEL_OK", flush=True)
 
         app.show_page("Khách hàng & Premium", app.customers_page)
         pump()

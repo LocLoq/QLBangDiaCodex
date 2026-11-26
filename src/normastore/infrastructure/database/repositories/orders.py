@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import ROUND_DOWN, Decimal
 
 from sqlalchemy import desc, func, select
@@ -143,6 +143,8 @@ class OrderQueries:
         text: str = "",
         page_request: PageRequest = PageRequest(),
         sort: SortSpec = SortSpec("created_at", True),
+        start_on: date | None = None,
+        end_on: date | None = None,
     ) -> PagedResult[OrderSummary]:
         stmt = (
             select(Order, Customer, Employee)
@@ -151,7 +153,11 @@ class OrderQueries:
         )
         if text.strip():
             term = f"%{text.strip()}%"
-            stmt = stmt.where((Order.code.like(term)) | (Customer.full_name.like(term)))
+            stmt = stmt.where((Order.code.ilike(term)) | (Customer.full_name.ilike(term)) | (Customer.phone.like(term)))
+        if start_on:
+            stmt = stmt.where(Order.created_at >= utc_start_of_day(start_on))
+        if end_on:
+            stmt = stmt.where(Order.created_at < utc_start_of_day(end_on + timedelta(days=1)))
         total_due = Order.gross_total - Order.discount_total + Order.deposit_total - func.coalesce(Order.deposit_applied, 0)
         fields = {
             "title": Order.code,

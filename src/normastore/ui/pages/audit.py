@@ -25,6 +25,7 @@ ACTION_LABELS = {
     "RETURN_RENTAL": "Trả đĩa thuê", "EXTEND_RENTAL": "Gia hạn thuê",
     "RENTAL_TO_SALE": "Chuyển thuê thành mua", "RETURN_SALE": "Hoàn hàng bán",
     "CREATE_RESERVATION": "Tạo đặt trước", "UPDATE_DISCOVERY_DISCOUNT": "Sửa ưu đãi khám phá",
+    "CANCEL_RESERVATION": "Hủy đặt trước",
     "CREATE_MOCK_FIXTURES": "Tạo dữ liệu mẫu", "GENERATE_MOCK_DAY": "Tạo dữ liệu mẫu theo ngày",
     "GENERATE_MOCK_RANGE": "Tạo dữ liệu mẫu theo kỳ",
 }

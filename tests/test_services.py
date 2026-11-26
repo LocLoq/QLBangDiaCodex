@@ -59,6 +59,20 @@ def test_list_customers_filters_by_name_or_phone(session):
     assert [row.id for row in service.list_customers("88877")] == [customer.id]
 
 
+def test_query_orders_filters_customer_and_business_date(session):
+    service = _StoreOperations(session)
+    customer = service.add_customer("Le Hoang Phuc", "0999888777")
+    item = service.list_catalog()[0][0]
+    copy = next(copy for copy in service.catalog_item(item.id).copies if copy.status.value == "AVAILABLE" and copy.can_sell)
+    order = service.checkout(customer.id, manager_id(session), [CheckoutLine(copy.id, LineAction.BUY)], [PaymentInput(PaymentMethod.CASH, Decimal("500000"))])
+    order.created_at = datetime(2026, 1, 1, 17, 0, tzinfo=timezone.utc)
+    session.flush()
+
+    assert [row.order_id for row in service.query_orders("Hoang Phuc", start_on=date(2026, 1, 2), end_on=date(2026, 1, 2)).items] == [order.id]
+    assert [row.order_id for row in service.query_orders("88877", start_on=date(2026, 1, 2)).items] == [order.id]
+    assert not service.query_orders("88877", end_on=date(2026, 1, 1)).items
+
+
 def test_active_rentals_lists_checked_out_copy(session):
     service = _StoreOperations(session)
     customer = service.list_customers()[0]

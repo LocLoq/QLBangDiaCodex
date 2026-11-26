@@ -160,7 +160,8 @@ class StoreService:
         "create_show", "set_show_poster", "add_episodes_bulk", "add_copy", "add_copies", "save_deposit_percent",
         "update_inventory_copy",
         "archive_items", "bulk_update_catalog_prices", "checkout", "return_rentals",
-        "extend_rental", "rental_to_sale", "return_sale", "inspect_copy", "reserve",
+        "extend_rental", "rental_to_sale", "return_sale", "inspect_copy", "reserve", "cancel_reservation",
+        "cancel_reservations",
         "expire_reservation_holds", "allocate_waiting_reservations", "allocate_released_reservations", "allocate_for_checkout",
         "set_discovery_discount", "ensure_mock_fixtures", "seed_mock_day", "seed_mock_range",
     })
@@ -605,8 +606,10 @@ class StoreService:
         text: str = "",
         page_request: PageRequest = PageRequest(),
         sort: SortSpec = SortSpec("created_at", True),
+        start_on: date | None = None,
+        end_on: date | None = None,
     ) -> PagedResult[OrderSummary]:
-        return self._execute("query_orders", text, page_request, sort)
+        return self._execute("query_orders", text, page_request, sort, start_on, end_on)
 
     def list_orders(self, text: str = "", limit: int = 200) -> list[OrderSummary]:
         return self._execute("list_orders", text, limit)
@@ -695,15 +698,22 @@ class StoreService:
         return self._execute("reserve", customer_id, item_ids, actor_id)
 
     def query_reservations(
-        self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created", True)
+        self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created", True),
+        *, text: str = "",
     ) -> PagedResult[ReservationView]:
-        return self._execute("query_reservations", page_request, sort)
+        return self._execute("query_reservations", page_request, sort, text=text)
 
     def list_reservations(self) -> list[ReservationView]:
         return self._execute("list_reservations")
 
     def expire_reservation_holds(self, now: datetime | None = None) -> int:
         return self._execute("expire_reservation_holds", now)
+
+    def cancel_reservation(self, reservation_id: int, actor_id: int) -> None:
+        self._execute("cancel_reservation", reservation_id, actor_id)
+
+    def cancel_reservations(self, reservation_ids: list[int], actor_id: int) -> None:
+        self._execute("cancel_reservations", reservation_ids, actor_id)
 
     def allocate_waiting_reservations(self, item_id: int) -> int:
         return self._execute("allocate_waiting_reservations", item_id)

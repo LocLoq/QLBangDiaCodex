@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import ttkbootstrap as tb
-from ttkbootstrap.constants import BOTH, END, RIGHT
+from ttkbootstrap.constants import BOTH, END, LEFT, RIGHT, X
 
 from normastore.application.contracts import PageRequest, SortSpec
 from normastore.domain.enums import (
@@ -21,6 +22,18 @@ class OrdersPageMixin:
         )
         search = tk.StringVar()
         ttk.Entry(bar, textvariable=search, width=35).pack(side=RIGHT)
+        ttk.Label(bar, text="Mã phiếu, tên hoặc SĐT:").pack(side=RIGHT, padx=6)
+        filters = ttk.Frame(page, padding=(0, 5))
+        filters.pack(fill=X)
+        ttk.Label(filters, text="Từ ngày:").pack(side=LEFT)
+        start_entry = tb.DateEntry(filters, dateformat="%d/%m/%Y", popup_title="Từ ngày", width=10)
+        start_entry.entry.delete(0, END)
+        start_entry.pack(side=LEFT, padx=6)
+        ttk.Label(filters, text="Đến ngày:").pack(side=LEFT)
+        end_entry = tb.DateEntry(filters, dateformat="%d/%m/%Y", popup_title="Đến ngày", width=10)
+        end_entry.entry.delete(0, END)
+        end_entry.pack(side=LEFT, padx=6)
+        date_filter = {"start": None, "end": None}
         tree = self._create_treeview(
             page,
             columns=("customer", "employee", "created", "status", "total"),
@@ -88,7 +101,7 @@ class OrdersPageMixin:
             tree.delete(*tree.get_children())
             rows.clear()
             export_button.configure(state="disabled")
-            result = self.store.query_orders(search.get(), PageRequest(page_number.get(), 50), SortSpec(str(sort_state['field']), bool(sort_state['descending'])))
+            result = self.store.query_orders(search.get(), PageRequest(page_number.get(), 50), SortSpec(str(sort_state['field']), bool(sort_state['descending'])), date_filter["start"], date_filter["end"])
             pager_update(result)
             for order in result.items:
                 rows[str(order.order_id)] = order
@@ -105,6 +118,30 @@ class OrdersPageMixin:
                         vnd(order.total_due),
                     ),
                 )
+
+        def apply_dates():
+            try:
+                start_text = start_entry.entry.get().strip()
+                end_text = end_entry.entry.get().strip()
+                start = datetime.strptime(start_text, "%d/%m/%Y").date() if start_text else None
+                end = datetime.strptime(end_text, "%d/%m/%Y").date() if end_text else None
+            except ValueError:
+                messagebox.showerror("Lọc theo ngày", "Vui lòng nhập ngày theo định dạng dd/mm/yyyy.", parent=self)
+                return
+            if start and end and start > end:
+                messagebox.showerror("Lọc theo ngày", "Ngày bắt đầu phải trước hoặc bằng ngày kết thúc.", parent=self)
+                return
+            date_filter.update(start=start, end=end)
+            page_number.set(1)
+            refresh()
+
+        def clear_dates():
+            start_entry.entry.delete(0, END)
+            end_entry.entry.delete(0, END)
+            apply_dates()
+
+        ttk.Button(filters, text="Lọc", command=apply_dates).pack(side=LEFT, padx=6)
+        ttk.Button(filters, text="Xóa lọc ngày", command=clear_dates, bootstyle="secondary").pack(side=LEFT)
 
         def detail(_event=None):
             selected = tree.selection()

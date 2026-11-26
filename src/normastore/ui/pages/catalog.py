@@ -54,7 +54,7 @@ class CatalogPageMixin:
         advanced_visible = tk.BooleanVar(value=False)
         advanced = ttk.Frame(filters)
         genre_filter, year_from, year_to, rating_min = (
-            tk.StringVar(),
+            tk.StringVar(value="Tất cả thể loại"),
             tk.StringVar(),
             tk.StringVar(),
             tk.StringVar(),
@@ -70,7 +70,7 @@ class CatalogPageMixin:
             tk.StringVar(),
             tk.StringVar(),
         )
-        show_filter, season_filter = tk.StringVar(), tk.StringVar()
+        show_filter, season_filter = tk.StringVar(value="Tất cả bộ"), tk.StringVar()
         genres = {"Tất cả thể loại": None}
         genres.update({genre.name: genre.id for genre in self.store.list_genres()})
         shows = {"Tất cả bộ": None}
@@ -112,7 +112,8 @@ class CatalogPageMixin:
             ttk.Label(advanced, text=label).grid(row=row, column=(index % 4) * 2, sticky="w", padx=(0, 3), pady=3)
             widget = (
                 ttk.Combobox(
-                    advanced, textvariable=variable, values=values, width=width, state="readonly"
+                    advanced, textvariable=variable, values=values, width=width,
+                    state="normal" if variable is show_filter else "readonly",
                 )
                 if values
                 else ttk.Entry(advanced, textvariable=variable, width=width)
@@ -120,6 +121,20 @@ class CatalogPageMixin:
             widget.grid(row=row, column=(index % 4) * 2 + 1, sticky="ew", padx=(0, 8), pady=3)
             if variable is show_filter:
                 show_filter_control = widget
+
+                def filter_shows(event):
+                    if event.keysym in ("Up", "Down", "Return", "Escape", "Tab"):
+                        return
+                    term = show_filter.get().strip().casefold()
+                    show_filter_control.configure(
+                        values=tuple(name for name in shows if term in name.casefold())
+                    )
+
+                show_filter_control.bind("<KeyRelease>", filter_shows)
+                show_filter_control.bind(
+                    "<<ComboboxSelected>>",
+                    lambda _event: show_filter_control.configure(values=tuple(shows)),
+                )
             if variable is genre_filter:
                 genre_filter_control = widget
             advanced.columnconfigure((index % 4) * 2 + 1, weight=1)
@@ -828,8 +843,6 @@ class CatalogPageMixin:
         def clear_filters():
             for variable in (
                 query,
-                type_filter,
-                genre_filter,
                 year_from,
                 year_to,
                 rating_min,
@@ -840,11 +853,13 @@ class CatalogPageMixin:
                 rental_max,
                 sale_min,
                 sale_max,
-                show_filter,
                 season_filter,
             ):
                 variable.set("")
             type_filter.set("Tất cả")
+            genre_filter.set("Tất cả thể loại")
+            show_filter.set("Tất cả bộ")
+            show_filter_control.configure(values=tuple(shows))
             only_rent.set(False)
             only_sell.set(False)
             page_number.set(1)

@@ -125,6 +125,21 @@ class CheckoutPageMixin:
             bootstyle="secondary",
         )
         picker_advanced_button.pack(side=RIGHT, padx=5)
+        def clear_picker_filters():
+            for variable in (
+                search, picker_genre, picker_year_from, picker_year_to, picker_rating,
+                picker_format, picker_condition, picker_rental_min, picker_rental_max,
+                picker_sale_min, picker_sale_max, picker_show, picker_season,
+            ):
+                variable.set("")
+            picker_type.set("Tất cả")
+            picker_rent.set(True)
+            picker_sell.set(True)
+            picker_show_control.configure(values=tuple(picker_shows))
+
+        ttk.Button(
+            picker_filters, text="Xóa bộ lọc", command=clear_picker_filters, bootstyle="secondary"
+        ).pack(side=RIGHT, padx=5)
         for index, (label, variable, values, width) in enumerate((
             ("Thể loại", picker_genre, tuple(picker_genres), 14),
             ("Từ năm", picker_year_from, (), 6),
@@ -147,7 +162,7 @@ class CheckoutPageMixin:
                     textvariable=variable,
                     values=values,
                     width=width,
-                    state="readonly",
+                    state="normal" if variable is picker_show else "readonly",
                 )
                 if values
                 else ttk.Entry(picker_advanced, textvariable=variable, width=width)
@@ -157,6 +172,20 @@ class CheckoutPageMixin:
                 picker_genre_control = control
             if variable is picker_show:
                 picker_show_control = control
+
+                def filter_picker_shows(event):
+                    if event.keysym in ("Up", "Down", "Return", "Escape", "Tab"):
+                        return
+                    term = picker_show.get().strip().casefold()
+                    picker_show_control.configure(
+                        values=tuple(name for name in picker_shows if term in name.casefold())
+                    )
+
+                picker_show_control.bind("<KeyRelease>", filter_picker_shows)
+                picker_show_control.bind(
+                    "<<ComboboxSelected>>",
+                    lambda _event: picker_show_control.configure(values=tuple(picker_shows)),
+                )
             picker_advanced.columnconfigure((index % 4) * 2 + 1, weight=1)
         catalog = self._create_treeview(
             catalog_frame,

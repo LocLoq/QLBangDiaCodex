@@ -7,15 +7,20 @@ from ttkbootstrap.constants import BOTH, END, LEFT, X
 from ttkbootstrap.widgets.scrolled import ScrolledFrame
 
 from normastore.application.contracts import CatalogFilters, PageRequest, SortSpec
-from normastore.domain.enums import ItemType, LineAction
+from normastore.domain.enums import ItemType, LineAction, ReservationState
 from normastore.ui.formatting import RESERVATION_LABELS, format_datetime, vnd
 
 
 class ReservationsPageMixin:
     def reservations_page(self, page) -> None:
         self._heading(page, "Đặt trước", "Theo thứ tự đặt • Giữ 24 giờ khi có hàng")
+        search_row = ttk.Frame(page)
+        search_row.pack(fill=X, pady=(0, 6))
+        search = tk.StringVar()
+        ttk.Label(search_row, text="Tìm tên khách hoặc phim:").pack(side=LEFT)
+        ttk.Entry(search_row, textvariable=search, width=34).pack(side=LEFT, padx=6)
         tree = self._create_treeview(
-            page, columns=("customer", "item", "state", "hold"), show="headings"
+            page, columns=("customer", "item", "state", "hold"), show="headings", selectmode="extended"
         )
         for column, title in [
             ("customer", "Khách"),
@@ -30,6 +35,36 @@ class ReservationsPageMixin:
         page_number = tk.IntVar(value=1)
         sort_state: dict[str, object] = {"field": "created", "descending": True}
         reservations = {}
+        cancellable_states = (ReservationState.WAITING, ReservationState.HELD)
+
+        def selected_reservations():
+            return [reservations[row] for row in tree.selection() if row in reservations]
+
+        def can_cancel(selected):
+            return bool(selected) and all(reservation.state in cancellable_states for reservation in selected)
+
+        def update_cancel_button(_event=None):
+            enabled = can_cancel(selected_reservations())
+            cancel_button.configure(state="normal" if enabled else "disabled")
+
+        def cancel(selected):
+            if not can_cancel(selected):
+                return
+            if len(selected) == 1:
+                reservation = selected[0]
+                prompt = f"Hủy lượt đặt trước “{reservation.item_title}” của {reservation.customer_name}?"
+            else:
+                prompt = f"Hủy {len(selected)} lượt đặt trước đã chọn?"
+            if not messagebox.askyesno("Hủy đặt trước", prompt, parent=self):
+                return
+            try:
+                self.store.cancel_reservations(
+                    [reservation.reservation_id for reservation in selected], self.account.employee_id,
+                )
+            except Exception as exc:
+                messagebox.showerror("Hủy đặt trước", str(exc), parent=self)
+                return
+            refresh()
 
         def open_show(show_id):
             catalog_page = self.pages.get("Phim & tập")
@@ -51,12 +86,19 @@ class ReservationsPageMixin:
             item = tree.identify_row(event.y)
             if item not in reservations:
                 return
-            tree.selection_set(item)
+            if item not in tree.selection():
+                tree.selection_set(item)
+            selected = selected_reservations()
             reservation = reservations[item]
             menu = tk.Menu(tree, tearoff=False)
             menu.add_command(label="Xem chi tiết phim / tập", command=lambda: self._open_catalog_details(reservation.item_id))
             if reservation.show_id:
                 menu.add_command(label="Xem chi tiết bộ phim", command=lambda: open_show(reservation.show_id))
+            menu.add_separator()
+            menu.add_command(
+                label="Hủy đặt trước", command=lambda: cancel(selected),
+                state="normal" if can_cancel(selected) else "disabled",
+            )
             menu.tk_popup(event.x_root, event.y_root)
 
         tree.bind("<Button-3>", context_menu)
@@ -233,7 +275,11 @@ class ReservationsPageMixin:
             self.store.expire_reservation_holds()
             tree.delete(*tree.get_children())
             reservations.clear()
-            result = self.store.query_reservations(PageRequest(page_number.get(), 50), SortSpec(str(sort_state['field']), bool(sort_state['descending'])))
+            result = self.store.query_reservations(
+                PageRequest(page_number.get(), 50),
+                SortSpec(str(sort_state["field"]), bool(sort_state["descending"])),
+                text=search.get(),
+            )
             pager(result)
             for reservation in result.items:
                 row_id = tree.insert(
@@ -248,16 +294,25 @@ class ReservationsPageMixin:
                     ),
                 )
                 reservations[row_id] = reservation
+            update_cancel_button()
 
         ttk.Button(bottom, text="Tạo đặt trước", command=create, bootstyle="primary").pack(
             side=LEFT
         )
+        cancel_button = ttk.Button(
+            bottom, text="Hủy đặt trước", command=lambda: cancel(selected_reservations()),
+            bootstyle="danger", state="disabled",
+        )
+        cancel_button.pack(side=LEFT, padx=(6, 0))
+        tree.bind("<<TreeviewSelect>>", update_cancel_button)
         ttk.Label(
             bottom,
-            text="Chọn khách hàng và phim hoặc tập phim trong cửa sổ đặt trước.",
+            text="Giữ Ctrl hoặc Shift để chọn nhiều lượt.",
             bootstyle="secondary",
         ).pack(side=LEFT, padx=10)
         pager = self._create_pager(page, page_number, refresh)
+        search_timer: dict[str, str] = {}
+        search.trace_add("write", lambda *_: self._debounce(search_timer, lambda: (page_number.set(1), refresh())))
         self._install_sortable_headings(
             tree,
             {"customer": "Khách", "item": "Phim / tập", "state": "Trạng thái", "hold": "Giữ đến"},

@@ -212,6 +212,8 @@ def test_customer_preorders_flow_from_bulk_import_to_receipt(store, session, sal
                        and row.customer_name == first.full_name)
     assert reservation.state == ReservationState.FULFILLED
     assert reservation.fulfilled_action == choice.action
+    with pytest.raises(BusinessError, match="Chỉ có thể hủy"):
+        store.cancel_reservation(reservation.reservation_id, actor)
     session.expire_all()
     fulfilled = session.query(Reservation).filter_by(customer_id=first.id, item_id=item.id).one()
     assert fulfilled.fulfilled_line_id is not None
@@ -245,6 +247,60 @@ def test_customer_preorders_allocate_release_and_expire_without_worker(store, se
     session.flush()
     assert store.customer_preorder_copies(second.id)[0].copy_id == created.copy_id
     assert store.customer_preorder_copies(first.id) == []
+
+
+def test_cancel_reservations_releases_held_copy_and_skips_selected_waiter(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    customers = [store.add_customer(f"Khách thử hủy {i}", f"098711116{i}") for i in (1, 2, 3)]
+    item = store.save_catalog_item(actor, item_type="MOVIE", title="Phim kiểm tra hủy đặt trước")
+    copy, = store.add_copies(item.id, 1, actor_id=actor)
+    held, skipped, following = [store.reserve(customer.id, [item.id], actor)[0] for customer in customers]
+
+    store.cancel_reservations([held.id, skipped.id], actor)
+    states = {row.reservation_id: row.state for row in store.list_reservations()}
+    assert (states[held.id], states[skipped.id], states[following.id]) == (
+        ReservationState.CANCELLED, ReservationState.CANCELLED, ReservationState.HELD,
+    )
+    cancelled = session.get(Reservation, held.id)
+    assert cancelled.allocated_copy_id is None and cancelled.hold_until is None
+    assert session.get(Reservation, following.id).allocated_copy_id == copy.copy_id
+    assert store.customer_preorder_copies(customers[0].id) == []
+    audit = session.scalar(select(AuditLog).filter_by(action="CANCEL_RESERVATION", entity_id=str(held.id)))
+    assert audit.actor_id == actor
+    skipped_audit = session.scalar(select(AuditLog).filter_by(
+        action="CANCEL_RESERVATION", entity_id=str(skipped.id),
+    ))
+    assert skipped_audit.detail == {"previous_state": "WAITING", "copy_id": None}
+
+    with pytest.raises(BusinessError, match="Chỉ có thể hủy"):
+        store.cancel_reservations([following.id, skipped.id], actor)
+    states = {row.reservation_id: row.state for row in store.list_reservations()}
+    assert states[following.id] == ReservationState.HELD
+
+    store.cancel_reservation(following.id, actor)
+    assert session.get(PhysicalCopy, copy.copy_id).status == CopyStatus.AVAILABLE
+
+
+def test_reservation_search_matches_customer_movie_and_series_before_pagination(store):
+    actor = store.authenticate("admin", "admin123").employee_id
+    customer = store.add_customer("Khách Chòm Sao Đỏ", "0987111164")
+    other = store.add_customer("Khách kiểm tra tìm đặt trước", "0987111165")
+    movie = store.save_catalog_item(actor, item_type="MOVIE", title="Chòm Sao Đỏ trên biển")
+    unrelated = store.save_catalog_item(actor, item_type="MOVIE", title="Phim ngoài từ khóa thử")
+    show = store.create_show("Chòm Sao Đỏ trong thành phố", actor_id=actor)
+    episode, = store.add_episodes_bulk(show.id, 1, 1, 1, actor_id=actor)
+    by_customer, = store.reserve(customer.id, [unrelated.id], actor)
+    matching_titles = store.reserve(other.id, [movie.id, episode.id], actor)
+
+    pages = [
+        store.query_reservations(PageRequest(number, 1), text="  chom sao do  ")
+        for number in (1, 2, 3)
+    ]
+    assert all(page.total_items == 3 and page.total_pages == 3 for page in pages)
+    assert {row.reservation_id for page in pages for row in page.items} == {
+        by_customer.id, *(row.id for row in matching_titles),
+    }
+    assert not store.query_reservations(text="không có từ khóa này trong đặt trước").items
 
 
 @pytest.mark.parametrize("is_episode", [False, True])

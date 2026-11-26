@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, or_, select
 
 from normastore.application.contracts import (
     PagedResult,
@@ -17,6 +17,7 @@ from normastore.infrastructure.database.models import (
     PhysicalCopy,
     OrderLine,
     Reservation,
+    Show,
 )
 from normastore.infrastructure.database.repositories.pagination import page_rows
 
@@ -26,7 +27,8 @@ class ReservationQueries:
         self.session = session
 
     def query_reservations(
-        self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created", True)
+        self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created", True),
+        *, text: str = "",
     ) -> PagedResult[ReservationView]:
         stmt = (
             select(Reservation, Customer, CatalogItem, OrderLine.action)
@@ -34,6 +36,15 @@ class ReservationQueries:
             .join(CatalogItem, Reservation.item_id == CatalogItem.id)
             .outerjoin(OrderLine, Reservation.fulfilled_line_id == OrderLine.id)
         )
+        if term := text.strip():
+            show_matches = select(Show.id).where(
+                Show.id == CatalogItem.show_id, Show.title.contains(term, autoescape=True),
+            ).exists()
+            stmt = stmt.where(or_(
+                Customer.full_name.contains(term, autoescape=True),
+                CatalogItem.title.contains(term, autoescape=True),
+                show_matches,
+            ))
         fields = {
             "customer": Customer.full_name,
             "item": CatalogItem.title,
@@ -85,6 +96,18 @@ class ReservationQueries:
             )
         )
 
+    def allocated_copy_ids(self, reservation_ids: list[int]) -> dict[int, int | None]:
+        rows = self.session.execute(
+            select(Reservation.id, Reservation.allocated_copy_id).where(Reservation.id.in_(reservation_ids))
+        )
+        return {reservation_id: copy_id for reservation_id, copy_id in rows}
+
+    def lock_reservations(self, reservation_ids: list[int]) -> list[Reservation]:
+        return list(self.session.scalars(
+            select(Reservation).where(Reservation.id.in_(reservation_ids)).order_by(Reservation.id)
+            .with_for_update().execution_options(populate_existing=True)
+        ))
+
     def expired_hold_copy_ids(self, now, item_id=None):
         statement = select(Reservation.allocated_copy_id).where(
             Reservation.state == ReservationState.HELD, Reservation.hold_until <= now,
@@ -107,11 +130,11 @@ class ReservationQueries:
             statement = statement.where(Reservation.item_id == item_id)
         return self.session.scalars(statement.order_by(Reservation.id).with_for_update())
 
-    def fetch_expire_reservation_holds_copy(self, reservation):
+    def lock_copy(self, copy_id: int) -> PhysicalCopy | None:
         return self.session.scalar(
             select(PhysicalCopy)
-            .where(PhysicalCopy.id == reservation.allocated_copy_id)
-            .with_for_update()
+            .where(PhysicalCopy.id == copy_id)
+            .with_for_update().execution_options(populate_existing=True)
         )
 
     def fetch_allocate_waiting_reservations_copies(self, item_id):

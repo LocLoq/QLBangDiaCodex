@@ -1061,8 +1061,8 @@ class _StoreOperations:
     def active_rentals(self) -> list[ActiveRental]:
         return list(self.query_active_rentals(PageRequest(1, 10_000)).items)
 
-    def query_orders(self, text: str = "", page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created_at", True)) -> PagedResult[OrderSummary]:
-        return self.orders_queries.query_orders(text, page_request, sort)
+    def query_orders(self, text: str = "", page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created_at", True), start_on: date | None = None, end_on: date | None = None) -> PagedResult[OrderSummary]:
+        return self.orders_queries.query_orders(text, page_request, sort, start_on, end_on)
 
     def list_orders(self, text: str = "", limit: int = 200) -> list[OrderSummary]:
         return list(self.query_orders(text, PageRequest(1, limit)).items)
@@ -1441,8 +1441,47 @@ class _StoreOperations:
         })
         return reservations
 
-    def query_reservations(self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created", True)) -> PagedResult[ReservationView]:
-        return self.reservations_queries.query_reservations(page_request, sort)
+    def cancel_reservation(self, reservation_id: int, actor_id: int) -> None:
+        self.cancel_reservations([reservation_id], actor_id)
+
+    def cancel_reservations(self, reservation_ids: list[int], actor_id: int) -> None:
+        ids = sorted(set(reservation_ids))
+        if not ids:
+            raise BusinessError("Hãy chọn ít nhất một lượt đặt trước.")
+        # Lock the copies first, as checkout and hold expiry do.
+        allocated = self.reservations_queries.allocated_copy_ids(ids)
+        copy_ids = sorted({copy_id for copy_id in allocated.values() if copy_id is not None})
+        copies = {copy_id: self.reservations_queries.lock_copy(copy_id) for copy_id in copy_ids}
+        reservations = self.reservations_queries.lock_reservations(ids)
+        if len(reservations) != len(ids):
+            raise BusinessError("Không tìm thấy lượt đặt trước.")
+        for reservation in reservations:
+            if reservation.state not in (ReservationState.WAITING, ReservationState.HELD):
+                raise BusinessError("Chỉ có thể hủy lượt đang chờ hoặc đang giữ đĩa.")
+            if reservation.allocated_copy_id != allocated.get(reservation.id):
+                raise BusinessError("Lượt đặt trước vừa thay đổi. Hãy chọn lại để hủy.")
+
+        released_items = set()
+        for reservation in reservations:
+            previous_state = reservation.state
+            copy_id = reservation.allocated_copy_id
+            reservation.state = ReservationState.CANCELLED
+            reservation.allocated_copy_id = None
+            reservation.hold_until = None
+            copy = copies.get(copy_id) if copy_id is not None else None
+            if previous_state == ReservationState.HELD and copy is not None and copy.status == CopyStatus.HELD:
+                copy.status = CopyStatus.AVAILABLE
+                self._status_history(copy, CopyStatus.HELD, CopyStatus.AVAILABLE, "Hủy đặt trước", actor_id)
+                released_items.add(reservation.item_id)
+            self._audit(actor_id, "CANCEL_RESERVATION", "Reservation", reservation.id, {
+                "previous_state": previous_state.value, "copy_id": copy_id,
+            })
+        # Reallocate only after all selected rows have left the queue.
+        for item_id in sorted(released_items):
+            self.allocate_waiting_reservations(item_id)
+
+    def query_reservations(self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created", True), *, text: str = "") -> PagedResult[ReservationView]:
+        return self.reservations_queries.query_reservations(page_request, sort, text=text)
 
     def customer_preorder_copies(self, customer_id: int) -> list[CopyChoice]:
         self.expire_reservation_holds()
@@ -1471,7 +1510,8 @@ class _StoreOperations:
         )
         item_ids: set[int] = set()
         for reservation in reservations:
-            copy = self.reservations_queries.fetch_expire_reservation_holds_copy(reservation)
+            copy_id = reservation.allocated_copy_id
+            copy = self.reservations_queries.lock_copy(copy_id) if copy_id is not None else None
             if copy and copy.status == CopyStatus.HELD:
                 copy.status = CopyStatus.AVAILABLE
                 self._status_history(copy, CopyStatus.HELD, CopyStatus.AVAILABLE, "Hết hạn giữ chỗ")
