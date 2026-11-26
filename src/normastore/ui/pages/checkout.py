@@ -191,12 +191,14 @@ class CheckoutPageMixin:
             cart_frame, text="Giỏ phiếu", font=("Segoe UI", 14, "bold"), bootstyle="primary"
         ).pack(anchor="w")
         cart = self._create_treeview(
-            cart_frame, columns=("action", "price", "due"), show="tree headings"
+            cart_frame, columns=("action", "price", "due", "note"), show="tree headings"
         )
         cart.heading("#0", text="Bản đĩa")
         cart.heading("action", text="Loại")
         cart.heading("price", text="Giá")
         cart.heading("due", text="Hạn trả")
+        cart.heading("note", text="Ghi chú")
+        cart.column("note", width=85, minwidth=65)
         cart.column("#0", width=140, minwidth=70)
         cart.column("action", width=65)
         cart.column("price", width=75, minwidth=50)
@@ -207,7 +209,7 @@ class CheckoutPageMixin:
         ttk.Label(summary, text="Tổng trước giảm giá:").grid(row=0, column=0, sticky="w")
         ttk.Label(summary, textvariable=amounts["gross"]).grid(row=0, column=2, sticky="e")
         ttk.Label(summary, text="Voucher:").grid(row=1, column=0, sticky="w")
-        voucher_combo = ttk.Combobox(summary, textvariable=voucher_var, width=14)
+        voucher_combo = ttk.Combobox(summary, textvariable=voucher_var, width=14, state="readonly")
         voucher_combo.grid(row=1, column=1, sticky="ew", padx=6, pady=2)
         Tooltip(voucher_combo, lambda: voucher_var.get())
         ttk.Label(summary, textvariable=amounts["voucher"]).grid(row=1, column=2, sticky="e")
@@ -233,6 +235,49 @@ class CheckoutPageMixin:
         customers: dict[str, CustomerView] = {}
         combos = {}
         vouchers = {}
+        preorder_customer = {"id": None}
+        auto_copy_ids: set[int] = set()
+        skipped_preorder_ids: set[int] = set()
+
+        def sync_preorders():
+            customer = customers.get(customer_var.get())
+            customer_id = customer.id if customer else None
+            changed = customer_id != preorder_customer["id"]
+            if changed:
+                cart_lines[:] = [line for line in cart_lines if line.copy_id not in auto_copy_ids]
+                for copy_id in auto_copy_ids:
+                    if cart.exists(str(copy_id)):
+                        cart.delete(str(copy_id))
+                auto_copy_ids.clear()
+                skipped_preorder_ids.clear()
+                preorder_customer["id"] = customer_id
+                for row in cart.get_children():
+                    cart.set(row, "note", "")
+            if customer is None:
+                return
+            try:
+                choices = self.store.customer_preorder_copies(customer.id)
+                valid_ids = {choice.copy_id for choice in choices}
+                stale_ids = auto_copy_ids - valid_ids
+                cart_lines[:] = [line for line in cart_lines if line.copy_id not in stale_ids]
+                for copy_id in stale_ids:
+                    cart.delete(str(copy_id))
+                auto_copy_ids.difference_update(stale_ids)
+                for row in cart.get_children():
+                    cart.set(row, "note", "Đặt trước" if int(row) in valid_ids else "")
+                used = {line.copy_id for line in cart_lines}
+                pending = [choice for choice in choices if choice.copy_id not in used | skipped_preorder_ids]
+                due = (datetime.strptime(due_entry.entry.get().strip(), "%d/%m/%Y").date()
+                       if any(choice.action == LineAction.RENT for choice in pending) else None)
+                for choice in pending:
+                    line_due = due if choice.action == LineAction.RENT else None
+                    cart_lines.append(CheckoutLine(choice.copy_id, choice.action, line_due))
+                    auto_copy_ids.add(choice.copy_id)
+                    cart.insert("", END, iid=str(choice.copy_id), text=f"{choice.barcode} — {choice.title}",
+                                values=("Thuê" if choice.action == LineAction.RENT else "Mua",
+                                        vnd(choice.unit_price), line_due or "—", "Đặt trước"))
+            except Exception as exc:
+                messagebox.showerror("Đặt trước", str(exc), parent=self)
 
         def refresh_customers(*_args):
             selected = customer_var.get()
@@ -331,6 +376,8 @@ class CheckoutPageMixin:
                 str(picker_sort["field"]), str(picker_sort["field"])
             )
             filters = picker_catalog_filters()
+            customer = customers.get(customer_var.get())
+            customer_id = customer.id if customer else None
             request = PageRequest(picker_page.get(), 48)
             sort = SortSpec(field, bool(picker_sort["descending"]))
             refresh_generation["value"] += 1
@@ -414,7 +461,7 @@ class CheckoutPageMixin:
                     catalog.pack(fill=BOTH, expand=True)
                 update_action_buttons()
 
-            self._run_async(lambda: self.store.query_checkout_catalog(filters, request, sort), render)
+            self._run_async(lambda: self.store.query_checkout_catalog(filters, request, sort, customer_id), render)
 
         def selected_item_id() -> int | None:
             ids = catalog.selection()
@@ -500,6 +547,7 @@ class CheckoutPageMixin:
                         due or "—",
                     ),
                 )
+                sync_preorders()
                 update_quote()
                 refresh_catalog()
             except Exception as exc:
@@ -612,6 +660,7 @@ class CheckoutPageMixin:
                     for choice in chosen:
                         cart_lines.append(CheckoutLine(choice.copy_id, action, due))
                         cart.insert("", END, iid=str(choice.copy_id), text=f"{choice.barcode} — {choice.title}", values=("Thuê" if action == LineAction.RENT else "Mua", vnd(choice.unit_price), due or "—"))
+                    sync_preorders()
                     dialog.destroy()
                     update_quote()
                     refresh_catalog()
@@ -651,6 +700,8 @@ class CheckoutPageMixin:
             ids = cart.selection()
             if ids:
                 selected_ids = {int(value) for value in ids}
+                skipped_preorder_ids.update(selected_ids)
+                auto_copy_ids.difference_update(selected_ids)
                 cart_lines[:] = [line for line in cart_lines if line.copy_id not in selected_ids]
                 for value in ids:
                     cart.delete(value)
@@ -677,6 +728,8 @@ class CheckoutPageMixin:
                 order = self.store.checkout(customer.id, self.account.employee_id, cart_lines, [PaymentInput(method, Decimal(received))], voucher_code(), combo_ids(), expected_quote=quote)
                 messagebox.showinfo("Hoàn tất", f"Đã tạo phiếu {order.code}.", parent=self)
                 cart_lines.clear()
+                auto_copy_ids.clear()
+                skipped_preorder_ids.clear()
                 cart.delete(*cart.get_children())
                 refresh_catalog()
                 update_quote()
@@ -765,7 +818,7 @@ class CheckoutPageMixin:
         ):
             variable.trace_add("write", reset_picker)
         customer_search_var.trace_add("write", lambda *_: self._debounce(customer_timer, refresh_customers))
-        customer_var.trace_add("write", lambda *_: (show_customer(), update_quote()))
+        customer_var.trace_add("write", lambda *_: (show_customer(), sync_preorders(), update_quote(), reset_picker()))
         voucher_var.trace_add("write", lambda *_: update_quote())
         combo_var.trace_add("write", lambda *_: update_quote())
 
@@ -779,6 +832,7 @@ class CheckoutPageMixin:
             picker_shows.update({show.title: show.show_id for show in self.store.list_shows()})
             picker_show_control.configure(values=tuple(picker_shows))
             refresh_customers()
+            sync_preorders()
             refresh_catalog()
             update_quote()
 

@@ -526,17 +526,17 @@ class CatalogPageMixin:
             item = selected()
             if not item:
                 return messagebox.showinfo("Kho", "Hãy chọn phim/tập trước.", parent=self)
-            dialog = self._dialog("Thêm đĩa", 460, 300)
+            dialog = self._dialog("Thêm đĩa", 460, 400)
             form = ttk.Frame(dialog, padding=14)
             form.pack(fill=BOTH, expand=True)
-            barcode, media = tk.StringVar(), tk.StringVar(value="DVD")
+            quantity, media = tk.StringVar(value="1"), tk.StringVar(value="DVD")
             can_rent, can_sell = (
                 tk.BooleanVar(value=item.can_rent),
                 tk.BooleanVar(value=item.can_sell),
             )
             location = tuple(tk.StringVar() for _ in range(3))
-            ttk.Label(form, text="Mã vạch").pack(anchor="w")
-            ttk.Entry(form, textvariable=barcode).pack(fill=X, pady=(2, 8))
+            ttk.Label(form, text="Số lượng (mã đĩa được tạo tự động)").pack(anchor="w")
+            ttk.Spinbox(form, textvariable=quantity, from_=1, to=1000000).pack(fill=X, pady=(2, 8))
             ttk.Label(form, text="Định dạng").pack(anchor="w")
             ttk.Combobox(
                 form, textvariable=media, values=("VHS", "VCD", "DVD", "Blu-ray"), state="readonly"
@@ -553,9 +553,15 @@ class CatalogPageMixin:
 
             def save():
                 try:
-                    self.store.add_copy(item.id, barcode.get(), media.get(), self.account.employee_id, can_rent.get(), can_sell.get(), *(v.get() for v in location))
+                    try:
+                        count = int(quantity.get())
+                    except ValueError:
+                        raise ValueError("Số lượng phải là số nguyên dương.") from None
+                    created = self.store.add_copies(item.id, count, media.get(), self.account.employee_id, can_rent.get(), can_sell.get(), *(v.get() for v in location))
                     dialog.destroy()
                     refresh()
+                    messagebox.showinfo("Nhập kho", f"Đã thêm {len(created)} đĩa.\nMã: {created[0].barcode}"
+                                        + (f" … {created[-1].barcode}" if len(created) > 1 else ""), parent=self)
                 except Exception as exc:
                     messagebox.showerror("Thêm đĩa", str(exc), parent=dialog)
 

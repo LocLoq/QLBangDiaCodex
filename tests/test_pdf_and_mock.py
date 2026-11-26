@@ -1,6 +1,7 @@
 from datetime import date, timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
 from normastore.application.contracts import CheckoutLine, PaymentInput
@@ -15,6 +16,33 @@ from normastore.infrastructure.database.models import (
     Voucher,
 )
 from normastore.infrastructure.pdf_receipts import PdfReceiptExporter
+
+
+@pytest.mark.parametrize("layout", ["A4", "80mm"])
+def test_preorder_note_is_rendered_in_pdf(session, tmp_path, monkeypatch, layout):
+    import normastore.infrastructure.pdf_receipts as pdf
+
+    service = _StoreOperations(session)
+    actor = session.scalar(select(Employee.id).limit(1))
+    customer = service.list_customers()[0]
+    item = service.save_catalog_item(actor, item_type="MOVIE", title="Phiếu đặt trước PDF")
+    service.reserve(customer.id, [item.id], actor)
+    copy, = service.add_copies(item.id, 1, actor_id=actor)
+    order = service.checkout(customer.id, actor,
+                             [CheckoutLine(copy.copy_id, LineAction.RENT, date.today() + timedelta(days=3))], [])
+    receipt = service.order_receipt(order.id)
+    paragraphs = []
+    original = pdf.Paragraph
+
+    def capture(text, *args, **kwargs):
+        paragraphs.append(text)
+        return original(text, *args, **kwargs)
+
+    monkeypatch.setattr(pdf, "Paragraph", capture)
+    destination = tmp_path / f"preorder-{layout}.pdf"
+    PdfReceiptExporter().export(receipt, destination, layout)
+    assert destination.read_bytes().startswith(b"%PDF-")
+    assert any("Đặt trước" in text for text in paragraphs)
 
 
 def test_receipt_pdf_contains_scalar_order_data(session, tmp_path):

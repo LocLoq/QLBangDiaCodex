@@ -127,7 +127,7 @@ class OrdersPageMixin:
             ).pack(anchor="w", pady=(0, 8))
             lines_tree = self._create_treeview(
                 frame,
-                columns=("barcode", "action", "price", "deposit", "due", "state"),
+                columns=("barcode", "action", "price", "deposit", "due", "state", "note"),
                 show="tree headings",
             )
             for key, title in [
@@ -137,6 +137,7 @@ class OrdersPageMixin:
                 ("deposit", "Cọc"),
                 ("due", "Hạn trả"),
                 ("state", "Tình trạng thuê"),
+                ("note", "Ghi chú"),
             ]:
                 lines_tree.heading(key, text=title)
             lines_tree.pack(fill=BOTH, expand=True)
@@ -152,6 +153,7 @@ class OrdersPageMixin:
                         vnd(line.deposit),
                         line.due_date or "—",
                         RENTAL_LABELS.get(line.rental_state, "—"),
+                        line.note or "",
                     ),
                 )
             ttk.Button(

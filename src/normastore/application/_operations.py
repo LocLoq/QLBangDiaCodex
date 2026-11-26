@@ -22,6 +22,7 @@ from normastore.application.contracts import (
     CheckoutLine,
     ComboSummary,
     CopyChoice,
+    CreatedCopy,
     EmployeeSummary,
     InventoryCopy,
     MockFixtureResult,
@@ -360,7 +361,7 @@ class _StoreOperations:
 
     def create_voucher(
         self,
-        code: str,
+        code: str | None,
         actor_id: int,
         percent_off: Decimal | None = None,
         amount_off: Decimal | None = None,
@@ -368,6 +369,10 @@ class _StoreOperations:
         ends_on: date | None = None,
     ) -> Voucher:
         self._require_manager(actor_id)
+        if code is None:
+            code = f"VC-{token_hex(6).upper()}"
+            while self.promotions.voucher_exists(code):
+                code = f"VC-{token_hex(6).upper()}"
         code = code.strip().upper()
         if not code:
             raise BusinessError("Mã voucher là bắt buộc.")
@@ -475,8 +480,8 @@ class _StoreOperations:
     def list_catalog(self, text: str = "", item_type: str = "", available_only: bool = False, page: int = 1, page_size: int = 48):
         return self.catalog_queries.list_catalog(text, item_type, available_only, page, page_size)
 
-    def query_checkout_catalog(self, filters=None, page_request=PageRequest(page_size=48), sort=SortSpec()):
-        return self.catalog_queries.query_checkout_catalog(filters, page_request, sort)
+    def query_checkout_catalog(self, filters=None, page_request=PageRequest(page_size=48), sort=SortSpec(), customer_id=None):
+        return self.catalog_queries.query_checkout_catalog(filters, page_request, sort, customer_id)
 
     def choose_checkout_copy(
         self,
@@ -689,7 +694,7 @@ class _StoreOperations:
     def add_copy(
         self,
         item_id: int,
-        barcode: str,
+        barcode: str | None = None,
         media_format: str = "DVD",
         actor_id: int | None = None,
         can_rent: bool | None = None,
@@ -704,6 +709,10 @@ class _StoreOperations:
         if any(len(value.strip()) > 80 for value in (aisle, rack, compartment)):
             raise BusinessError("Vị trí không được dài quá 80 ký tự.")
         item = self.catalog_item(item_id)
+        if barcode is None:
+            barcode = f"DIA-{token_hex(6).upper()}"
+            while self.inventory_queries.fetch_add_copy_check(barcode):
+                barcode = f"DIA-{token_hex(6).upper()}"
         if not barcode.strip():
             raise BusinessError("Barcode là bắt buộc.")
         if self.inventory_queries.fetch_add_copy_check(barcode):
@@ -732,6 +741,17 @@ class _StoreOperations:
         })
         self.allocate_waiting_reservations(item.id)
         return copy
+
+    def add_copies(
+        self, item_id: int, quantity: int, media_format: str = "DVD",
+        actor_id: int | None = None, can_rent: bool | None = None,
+        can_sell: bool | None = None, aisle: str = "", rack: str = "", compartment: str = "",
+    ) -> list[CreatedCopy]:
+        if type(quantity) is not int or quantity < 1:
+            raise BusinessError("Số lượng phải là số nguyên dương.")
+        copies = [self.add_copy(item_id, None, media_format, actor_id, can_rent, can_sell,
+                                aisle, rack, compartment) for _ in range(quantity)]
+        return [CreatedCopy(copy.id, copy.barcode) for copy in copies]
 
     def deposit_percent(self) -> Decimal:
         return next((Decimal(row.amount) for row in self.inventory_queries.deposit_defaults() if row.media_format == "PERCENT"), Decimal("75"))
@@ -777,6 +797,8 @@ class _StoreOperations:
         copy = self.inventory_queries.lock_copy(copy_id)
         if not copy:
             raise BusinessError("Không tìm thấy bản đĩa.")
+        if request.barcode != copy.barcode:
+            raise BusinessError("Mã đĩa do hệ thống quản lý, không được thay đổi.")
         if self.inventory_queries.fetch_update_inventory_copy_check(copy_id, request):
             raise BusinessError("Barcode đã tồn tại.")
         safe_statuses = {CopyStatus.AVAILABLE, CopyStatus.INSPECTION, CopyStatus.REPAIR, CopyStatus.LOST, CopyStatus.RETIRED}
@@ -792,7 +814,6 @@ class _StoreOperations:
             "location": [copy.aisle, copy.rack, copy.compartment],
         }
         old_status = copy.status
-        copy.barcode = request.barcode.strip()
         copy.media_format = request.media_format
         copy.condition = request.condition
         copy.can_rent, copy.can_sell = request.can_rent, request.can_sell
@@ -1005,9 +1026,12 @@ class _StoreOperations:
             if request.action == LineAction.RENT:
                 deposit = quote.line_deposits[copy.id]
             line = OrderLine(order_id=order.id, copy_id=copy.id, action=request.action, title_snapshot=copy.item.title, barcode_snapshot=copy.barcode,
-                             unit_price=price, discount_amount=quote.line_discounts[copy.id], deposit_amount=deposit)
+                             unit_price=price, discount_amount=quote.line_discounts[copy.id], deposit_amount=deposit,
+                             note="Đặt trước" if copy.id in held_reservations else None)
             self.orders_queries.add_order_line(line)
             self.orders_queries.flush()
+            if copy.id in held_reservations:
+                held_reservations[copy.id].fulfilled_line_id = line.id
             before = copy.status
             if request.action == LineAction.RENT:
                 copy.status = CopyStatus.RENTED
@@ -1058,6 +1082,7 @@ class _StoreOperations:
                 deposit=Decimal(line.deposit_amount),
                 due_date=term.due_date if term else None,
                 rental_state=term.state if term else None,
+                note=line.note,
             )
             for line, copy, term in lines
         ]
@@ -1110,6 +1135,7 @@ class _StoreOperations:
                     deposit=Decimal(line.deposit_amount),
                     due_date=term.due_date if term else None,
                     rental_state=term.state.value if term else None,
+                    note=line.note,
                 )
                 for line, copy, term in line_rows
             ),
@@ -1417,6 +1443,21 @@ class _StoreOperations:
 
     def query_reservations(self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created", True)) -> PagedResult[ReservationView]:
         return self.reservations_queries.query_reservations(page_request, sort)
+
+    def customer_preorder_copies(self, customer_id: int) -> list[CopyChoice]:
+        self.expire_reservation_holds()
+        self.allocate_released_reservations()
+        choices = []
+        for copy in self.reservations_queries.held_copies_for_customer(customer_id, datetime.now(timezone.utc)):
+            item = copy.item
+            action = (LineAction.RENT if item.can_rent and copy.can_rent else
+                      LineAction.BUY if item.can_sell and copy.can_sell else None)
+            if action is None:
+                continue
+            # Use the same pricing and availability rules as manual selection.
+            choices.extend(choice for choice in self.checkout_copies(item.id, action, customer_id=customer_id)
+                           if choice.copy_id == copy.id)
+        return choices
 
     def list_reservations(self) -> list[ReservationView]:
         return list(self.query_reservations(PageRequest(1, 10_000)).items)

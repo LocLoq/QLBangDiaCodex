@@ -242,16 +242,13 @@ class PromotionsPageMixin:
                 )
 
         def create_voucher():
-            code = simpledialog.askstring("Voucher", "Mã voucher:", parent=self)
-            if not code:
-                return
             value = simpledialog.askstring(
                 "Voucher", "Nhập phần trăm (vd 10) hoặc số tiền kèm 'd' (vd 20000d):", parent=self
             )
             if not value:
                 return
             try:
-                self.store.create_voucher_from_text(code, value, self.account.employee_id)
+                self.store.create_voucher_from_text(None, value, self.account.employee_id)
                 refresh_promotions()
             except Exception as exc:
                 messagebox.showerror("Voucher", str(exc), parent=self)

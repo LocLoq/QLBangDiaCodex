@@ -17,6 +17,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from PIL import Image
+from matplotlib.backend_bases import MouseEvent
 from sqlalchemy.engine import make_url
 from ttkbootstrap import DateEntry
 
@@ -460,12 +461,34 @@ def main():
         assert len(revenue_axis.lines) == 2, "Biểu đồ doanh thu thiếu thuê hoặc bán."
         assert damage_axis.patches, "Biểu đồ hỏng hóc thiếu lượt trả thử."
         assert genre_axis.patches, "Biểu đồ thể loại thiếu lượt bán thử."
+
+        def hover_revenue():
+            line = revenue_axis.lines[0]
+            day = line.get_xdata()[-1]
+            low, high = revenue_axis.get_ylim()
+            x, y = revenue_axis.transData.transform((line.get_xdata(orig=False)[-1], (low + high) / 2))
+            event = MouseEvent("motion_notify_event", analysis.canvas, x, y)
+            analysis.canvas.callbacks.process(event.name, event)
+            return day, next(text for text in revenue_axis.texts if text.get_visible())
+
+        hovered_date, tooltip = hover_revenue()
+        report = service.chart_report(hovered_date, hovered_date)
+        expected = {action: amount for _, action, amount in report.revenue}
+        assert tooltip.get_text() == (
+            f"{hovered_date:%d/%m/%Y}\nThuê: {vnd(expected.get(LineAction.RENT, 0), exact=True)}"
+            f"\nBán: {vnd(expected.get(LineAction.BUY, 0), exact=True)}"
+        )
+        outside = MouseEvent("motion_notify_event", analysis.canvas, 0, 0)
+        analysis.canvas.callbacks.process(outside.name, outside)
+        assert not tooltip.get_visible()
         action_picker = next(w for w in widgets(page) if isinstance(w, ttk.Combobox) and
                              "Tất cả giao dịch" in w.cget("values"))
         action_picker.set("Mua")
         button(page, "Áp dụng").invoke()
         pump(2)
         assert [line.get_label() for line in revenue_axis.lines] == ["Bán"]
+        _, tooltip = hover_revenue()
+        assert "Bán:" in tooltip.get_text() and "Thuê:" not in tooltip.get_text()
         assert not damage_axis.patches, "Bộ lọc mua vẫn hiển thị hỏng hóc thuê."
         assert genre_axis.patches
         period_picker = next(w for w in widgets(page) if isinstance(w, ttk.Combobox) and
@@ -480,6 +503,7 @@ def main():
         button(page, "Áp dụng").invoke()
         pump(2)
         assert not revenue_axis.lines and not genre_axis.patches, "Bộ lọc ngày vẫn hiển thị giao dịch hôm nay."
+        assert tooltip not in revenue_axis.texts
         for entry in dates:
             entry.entry.delete(0, tk.END)
             entry.entry.insert(0, date.today().strftime("%d/%m/%Y"))
@@ -498,6 +522,7 @@ def main():
             assert png_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
         print("STATISTICS_EXPORT_OK", flush=True)
         print("STATISTICS_CHARTS_AND_FILTER_OK", flush=True)
+        print("REVENUE_HOVER_TOOLTIP_OK", flush=True)
 
         app.show_page("Tổng quan", app.dashboard_page)
         pump(1.5)

@@ -36,8 +36,10 @@ def test_sale_return_condition_migration_preserves_history():
             line = session.query(OrderLine).filter_by(order_id=order.id, copy_id=copy.id).one()
             refund = service.return_sale(line.id, actor, condition=CopyCondition.DAMAGED)
             service.update_inventory_copy(copy.id, UpdateInventoryCopyRequest(
-                "MIGRATION-CHANGED", "DVD", CopyCondition.DAMAGED, True, True, CopyStatus.INSPECTION,
+                "MIGRATION-SALE", "DVD", CopyCondition.DAMAGED, True, True, CopyStatus.INSPECTION,
             ), actor)
+            # Simulate a legacy barcode edit outside the current application API.
+            copy.barcode = "MIGRATION-CHANGED"
             session.commit()
             session.execute(text("UPDATE audit_logs SET created_at = DATE_ADD(created_at, INTERVAL 2 SECOND) WHERE action = 'UPDATE_COPY'"))
             session.commit()

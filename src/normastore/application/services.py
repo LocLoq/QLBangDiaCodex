@@ -157,7 +157,7 @@ class StoreService:
         "change_password", "create_employee_account", "add_customer", "update_customer", "activate_premium",
         "set_premium_end_date", "cancel_premium", "delete_customer",
         "create_voucher", "create_fixed_combo", "create_show_episode_combo", "save_catalog_item",
-        "create_show", "set_show_poster", "add_episodes_bulk", "add_copy", "save_deposit_percent",
+        "create_show", "set_show_poster", "add_episodes_bulk", "add_copy", "add_copies", "save_deposit_percent",
         "update_inventory_copy",
         "archive_items", "bulk_update_catalog_prices", "checkout", "return_rentals",
         "extend_rental", "rental_to_sale", "return_sale", "inspect_copy", "reserve",
@@ -250,7 +250,7 @@ class StoreService:
             self.invalidate_cache()
         return result
 
-    def create_voucher_from_text(self, code: str, value: str, actor_id: int):
+    def create_voucher_from_text(self, code: str | None, value: str, actor_id: int):
         text = value.strip().lower()
         percent = None if text.endswith("d") else Decimal(text)
         amount = Decimal(text[:-1]) if text.endswith("d") else None
@@ -373,7 +373,7 @@ class StoreService:
 
     def create_voucher(
         self,
-        code: str,
+        code: str | None,
         actor_id: int,
         percent_off: Decimal | None = None,
         amount_off: Decimal | None = None,
@@ -422,8 +422,8 @@ class StoreService:
     ):
         return self._execute("list_catalog", text, item_type, available_only, page, page_size)
 
-    def query_checkout_catalog(self, filters=None, page_request=PageRequest(page_size=48), sort=SortSpec()):
-        return self._execute("query_checkout_catalog", filters, page_request, sort)
+    def query_checkout_catalog(self, filters=None, page_request=PageRequest(page_size=48), sort=SortSpec(), customer_id=None):
+        return self._execute("query_checkout_catalog", filters, page_request, sort, customer_id)
 
     def choose_checkout_copy(
         self, item_id: int, action: LineAction, excluded_copy_ids: set[int] | None = None
@@ -499,7 +499,7 @@ class StoreService:
     def add_copy(
         self,
         item_id: int,
-        barcode: str,
+        barcode: str | None = None,
         media_format: str = "DVD",
         actor_id: int | None = None,
         can_rent: bool | None = None,
@@ -514,6 +514,17 @@ class StoreService:
 
     def deposit_percent(self) -> Decimal:
         return self._execute("deposit_percent")
+
+    def add_copies(
+        self, item_id: int, quantity: int, media_format: str = "DVD",
+        actor_id: int | None = None, can_rent: bool | None = None,
+        can_sell: bool | None = None, aisle: str = "", rack: str = "", compartment: str = "",
+    ):
+        return self._execute("add_copies", item_id, quantity, media_format, actor_id,
+                             can_rent, can_sell, aisle, rack, compartment)
+
+    def customer_preorder_copies(self, customer_id: int) -> list[CopyChoice]:
+        return self._execute("customer_preorder_copies", customer_id)
 
     def save_deposit_percent(self, value: Decimal, actor_id: int) -> Decimal:
         return self._execute("save_deposit_percent", value, actor_id)

@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta, timezone
+from dataclasses import replace
 from decimal import Decimal
 
 import numpy as np
@@ -1614,7 +1615,11 @@ def test_order_receipt_keeps_barcode_and_prices_after_inventory_edit(session):
     order = service.checkout(customer.id, actor, lines, [PaymentInput(PaymentMethod.CASH, quote.total_due)])
     request = UpdateInventoryCopyRequest("HISTORY-NEW", "DVD", CopyCondition.GOOD, True, True,
                                          CopyStatus.SOLD, sale_price_override=Decimal("200000"), sale_price_mode="DIRECT")
-    service.update_inventory_copy(copy.id, request, actor)
+    with pytest.raises(BusinessError, match="không được thay đổi"):
+        service.update_inventory_copy(copy.id, request, actor)
+    service.update_inventory_copy(copy.id, replace(request, barcode=copy.barcode), actor)
+    # Historical snapshots also survive changes made outside the application.
+    copy.barcode = "HISTORY-NEW"
     session.flush()
     receipt = service.order_receipt(order.id)
     assert receipt.lines[0].barcode == "HISTORY-ORIGINAL"

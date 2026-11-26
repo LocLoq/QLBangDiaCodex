@@ -16,8 +16,11 @@ RESERVATION_LABELS = {ReservationState.WAITING: "Đang chờ", ReservationState.
 ORDER_LABELS = {"CONFIRMED": "Đã xác nhận", "PARTIALLY_PAID": "Chưa thanh toán đủ"}
 
 
-def vnd(amount: Decimal | int | float | None) -> str:
-    return f"{Decimal(amount or 0):,.0f} đ".replace(",", ".")
+def vnd(amount: Decimal | int | float | None, *, exact: bool = False) -> str:
+    value = Decimal(amount or 0)
+    if exact and value != value.to_integral_value():
+        return f"{value:,.2f} đ".translate(str.maketrans(",.", ".,"))
+    return f"{value:,.0f} đ".replace(",", ".")
 
 
 def format_datetime(value) -> str:

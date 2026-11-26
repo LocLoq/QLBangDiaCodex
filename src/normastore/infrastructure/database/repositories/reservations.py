@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from sqlalchemy import desc, select
 
 from normastore.application.contracts import (
@@ -13,6 +15,7 @@ from normastore.infrastructure.database.models import (
     CatalogItem,
     Customer,
     PhysicalCopy,
+    OrderLine,
     Reservation,
 )
 from normastore.infrastructure.database.repositories.pagination import page_rows
@@ -26,9 +29,10 @@ class ReservationQueries:
         self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created", True)
     ) -> PagedResult[ReservationView]:
         stmt = (
-            select(Reservation, Customer, CatalogItem)
+            select(Reservation, Customer, CatalogItem, OrderLine.action)
             .join(Customer, Reservation.customer_id == Customer.id)
             .join(CatalogItem, Reservation.item_id == CatalogItem.id)
+            .outerjoin(OrderLine, Reservation.fulfilled_line_id == OrderLine.id)
         )
         fields = {
             "customer": Customer.full_name,
@@ -55,8 +59,9 @@ class ReservationQueries:
                     reservation.hold_until,
                     item.id,
                     item.show_id,
+                    fulfilled_action,
                 )
-                for reservation, customer, item in page.items
+                for reservation, customer, item, fulfilled_action in page.items
             ),
             page.page,
             page.page_size,
@@ -168,6 +173,20 @@ class ReservationQueries:
         if lock:
             statement = statement.with_for_update()
         return self.session.scalar(statement)
+
+    def held_copies_for_customer(self, customer_id, now):
+        return self.session.scalars(
+            select(PhysicalCopy)
+            .join(Reservation, Reservation.allocated_copy_id == PhysicalCopy.id)
+            .join(CatalogItem, PhysicalCopy.item_id == CatalogItem.id)
+            .where(Reservation.customer_id == customer_id,
+                   Reservation.state == ReservationState.HELD,
+                   Reservation.hold_until > now,
+                   PhysicalCopy.status == CopyStatus.HELD,
+                   CatalogItem.archived.is_(False),
+                   CatalogItem.release_date.is_(None) | (CatalogItem.release_date <= date.today()))
+            .order_by(Reservation.created_at, Reservation.id)
+        ).all()
 
     def add_reservation(self, value):
         self.session.add(value)

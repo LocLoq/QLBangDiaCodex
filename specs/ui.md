@@ -5,12 +5,12 @@
 | Trang | Thao tác / service chính |
 |---|---|
 | Tổng quan | Tồn kho thấp, phim được thuê/bán nhiều, khám phá, đề cử ngẫu nhiên và đặt trước phim sắp ra |
-| Tạo phiếu | Tìm phim, chọn đĩa, chọn mùa hoặc khoảng tập, `quote`, `checkout` |
+| Tạo phiếu | Tìm phim, chọn đĩa, chọn mùa hoặc khoảng tập, tự thêm đĩa đặt trước khi chọn khách, `quote`, `checkout` |
 | Hóa đơn đã tạo | `query_orders`, `order_detail`, `export_order_pdf` |
 | Đĩa đã được thuê | `query_active_rentals`, `return_rentals`, `extend_rental`, `rental_to_sale`, `return_sale` |
 | Đặt trước | `reserve`, `expire_reservation_holds`, `query_reservations` |
 | Phim & tập | Danh sách/thẻ, tìm và lọc, xem bộ, thêm/sửa phim hoặc tập và thể loại, nhập đĩa |
-| Kho đĩa | Tìm kiếm, nhóm bộ/mùa/tập/đĩa, thêm, cập nhật và kiểm tra đĩa |
+| Kho đĩa | Tìm kiếm, nhóm bộ/mùa/tập/đĩa, chuột phải tên phim/tập để thêm đĩa theo số lượng, mã tự sinh, cập nhật và kiểm tra đĩa |
 | Khách hàng & Premium | Tìm/tạo khách, kích hoạt Premium, đề cử |
 | Combo / Voucher | Danh sách, tạo combo cố định/theo bộ và voucher |
 | Thông báo | `query_notifications` |

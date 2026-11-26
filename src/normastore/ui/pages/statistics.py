@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import tkinter as tk
+from bisect import bisect_left
 from datetime import date, datetime
 from tkinter import filedialog, messagebox, ttk
 
@@ -21,6 +22,7 @@ from normastore.ui.pages.inventory import CONDITION_LABELS, STATUS_LABELS
 class StatisticsPageMixin:
     def statistics_page(self, page) -> None:
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        from matplotlib.dates import date2num
         from matplotlib.figure import Figure
 
         root_page = page
@@ -139,6 +141,46 @@ class StatisticsPageMixin:
         genre_axis = analysis_figure.add_subplot(324)
         analysis_chart = FigureCanvasTkAgg(analysis_figure, master=analysis_frame)
         analysis_chart.get_tk_widget().pack(fill=X)
+        revenue_points: list[tuple[float, str]] = []
+        revenue_tooltip = None
+        hovered_day: float | None = None
+
+        def hide_revenue_tooltip(_event=None):
+            nonlocal hovered_day
+            hovered_day = None
+            if revenue_tooltip is not None and revenue_tooltip.get_visible():
+                revenue_tooltip.set_visible(False)
+                analysis_chart.draw_idle()
+
+        def hover_revenue(event):
+            nonlocal hovered_day
+            if (event.inaxes is not revenue_axis or event.xdata is None or event.ydata is None
+                    or not revenue_points or revenue_tooltip is None):
+                hide_revenue_tooltip()
+                return
+            index = bisect_left(revenue_points, event.xdata, key=lambda point: point[0])
+            candidates = revenue_points[max(0, index - 1):index + 1]
+            day, text = min(candidates, key=lambda point: abs(point[0] - event.xdata))
+            if day == hovered_day:
+                return
+            hovered_day = day
+            bounds = revenue_axis.bbox
+            left_side = bounds.x1 - event.x < 205
+            below = bounds.y1 - event.y < 65
+            revenue_tooltip.xy = event.xdata, event.ydata
+            revenue_tooltip.set_position((-10 if left_side else 10, -10 if below else 10))
+            revenue_tooltip.set_ha("right" if left_side else "left")
+            revenue_tooltip.set_va("top" if below else "bottom")
+            revenue_tooltip.set_text(text)
+            revenue_tooltip.set_color(self._palette.tooltip_foreground)
+            revenue_tooltip.get_bbox_patch().set_facecolor(self._palette.tooltip_background)
+            revenue_tooltip.set_visible(True)
+            analysis_chart.draw_idle()
+
+        analysis_chart.mpl_connect("motion_notify_event", hover_revenue)
+        analysis_chart.mpl_connect("figure_leave_event", hide_revenue_tooltip)
+        analysis_chart.mpl_connect("scroll_event", hide_revenue_tooltip)
+        analysis_chart.get_tk_widget().bind("<Unmap>", hide_revenue_tooltip, add="+")
         chart_frame.pack_configure(before=stats_label)
         analysis_frame.pack_configure(before=stats_label)
         for table in (top_tree, sale_tree, combo_tree, voucher_tree, overdue_tree, stockout_tree):
@@ -353,6 +395,7 @@ class StatisticsPageMixin:
             if not path:
                 return
             try:
+                hide_revenue_tooltip()
                 analysis_figure.savefig(path, dpi=160, bbox_inches="tight")
                 messagebox.showinfo("Thống kê", "Đã xuất ảnh biểu đồ.", parent=self)
             except Exception as exc:
@@ -368,6 +411,7 @@ class StatisticsPageMixin:
         refresh_generation = {"value": 0}
 
         def render(result):
+            nonlocal hovered_day, revenue_tooltip
             report, chart_data = result
             discount_labels = {"DISCOVERY": "Khám phá", "COMBO": "Combo", "PREMIUM": "Hội viên", "VOUCHER": "Voucher"}
             stats.set(
@@ -436,6 +480,9 @@ class StatisticsPageMixin:
             figure.tight_layout()
             chart.draw_idle()
 
+            hovered_day = None
+            revenue_tooltip = None
+            revenue_points.clear()
             revenue_axis.clear()
             damage_axis.clear()
             genre_axis.clear()
@@ -443,13 +490,30 @@ class StatisticsPageMixin:
             dates = sorted({day for day, _action, _amount in chart_data.revenue})
             if dates:
                 by_day = {(day, action): amount for day, action, amount in chart_data.revenue}
+                available_actions = {action for _, action in by_day}
+                visible_series = []
                 for action, name, color in ((LineAction.RENT, "Thuê", "#3b82f6"), (LineAction.BUY, "Bán", "#2e8b57")):
+                    if action not in available_actions:
+                        continue
+                    visible_series.append((action, name))
                     values = [float(by_day.get((day, action), 0)) for day in dates]
-                    if any(values):
-                        revenue_axis.plot(dates, values, label=name, color=color)
-                        revenue_axis.fill_between(dates, values, alpha=0.25, color=color)
-                if revenue_axis.get_legend_handles_labels()[0]:
+                    revenue_axis.plot(dates, values, label=name, color=color)
+                    revenue_axis.fill_between(dates, values, alpha=0.25, color=color)
+                if visible_series:
                     revenue_axis.legend()
+                    for day in dates:
+                        rows = [f"{day:%d/%m/%Y}"]
+                        rows.extend(
+                            f"{name}: {vnd(by_day.get((day, action), 0), exact=True)}"
+                            for action, name in visible_series
+                        )
+                        revenue_points.append((date2num(day), "\n".join(rows)))
+                    revenue_tooltip = revenue_axis.annotate(
+                        "", xy=(0, 0), textcoords="offset points", xytext=(10, 10),
+                        fontsize=10, zorder=10, visible=False,
+                        bbox={"boxstyle": "round,pad=0.45", "edgecolor": "none"},
+                    )
+                    revenue_tooltip.set_in_layout(False)
             else:
                 revenue_axis.text(0.5, 0.5, "Không có giao dịch trong kỳ", ha="center", transform=revenue_axis.transAxes)
             revenue_axis.set_title("Doanh thu phim sau giảm, không gồm cọc")
@@ -482,6 +546,7 @@ class StatisticsPageMixin:
                 messagebox.showerror("Thống kê", str(exc), parent=self)
                 return
             refresh_generation["value"] += 1
+            hide_revenue_tooltip()
             generation = refresh_generation["value"]
             stats.set("Đang tải thống kê…")
             csv_button.configure(state="disabled")

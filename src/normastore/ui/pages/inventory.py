@@ -120,6 +120,7 @@ class InventoryPageMixin:
                     if season is None:
                         season = tree.insert(node, END, text=f"Mùa {episode.season_number}")
                         seasons[episode.season_number] = season
+                        nodes[season] = ("season", (identifier, episode.season_number))
                     child = tree.insert(season, END, iid=f"item:{episode.item_id}", text=f"Tập {episode.episode_number}: {episode.title}")
                     nodes[child] = ("item", episode.item_id)
                     add_placeholder(child)
@@ -209,6 +210,8 @@ class InventoryPageMixin:
                     else ttk.Entry(body, textvariable=variable)
                 )
                 control.grid(row=row, column=1, sticky="ew", pady=4)
+                if variable is barcode:
+                    control.configure(state="readonly")
             ttk.Checkbutton(body, text="Cho thuê", variable=can_rent).grid(
                 row=len(fields), column=0, sticky="w", pady=6
             )
@@ -266,10 +269,12 @@ class InventoryPageMixin:
             except Exception as exc:
                 messagebox.showerror("Kiểm tra kho", str(exc), parent=self)
 
-        def add_copy():
-            dialog = self._dialog("Thêm đĩa vào kho", 720, 530)
+        def add_copy(item_id=None, show_id=None, season_number=None):
+            if not self._can_manage():
+                return messagebox.showerror("Kho đĩa", "Chỉ Quản lý/Quản trị viên được nhập kho.", parent=self)
+            dialog = self._dialog("Thêm đĩa vào kho", 720, 590)
             query = tk.StringVar()
-            barcode = tk.StringVar()
+            quantity = tk.StringVar(value="1")
             media = tk.StringVar(value="DVD")
             rentable = tk.BooleanVar(value=True)
             sellable = tk.BooleanVar(value=True)
@@ -277,7 +282,7 @@ class InventoryPageMixin:
             form = ttk.Frame(dialog, padding=12)
             form.pack(fill=BOTH, expand=True)
             ttk.Label(form, text="Tìm phim / tập").pack(anchor="w")
-            ttk.Entry(form, textvariable=query).pack(fill=X)
+            ttk.Entry(form, textvariable=query, state="readonly" if item_id else "normal").pack(fill=X)
             items = self._create_treeview(form, columns=("title",), show="headings", height=8, selectmode="browse")
             items.heading("title", text="Phim / tập")
             items.pack(fill=BOTH, expand=True, pady=6)
@@ -286,8 +291,16 @@ class InventoryPageMixin:
             def load_items():
                 if not dialog.winfo_exists():
                     return
-                result = self.store.query_catalog(CatalogFilters(text=query.get()), PageRequest(page_var.get(), 50))
                 items.delete(*items.get_children())
+                if item_id is not None:
+                    item = self.store.catalog_item(item_id)
+                    items.insert("", END, iid=str(item.id), values=(item.title,))
+                    items.selection_set(str(item.id))
+                    rentable.set(item.can_rent)
+                    sellable.set(item.can_sell)
+                    return
+                result = self.store.query_catalog(CatalogFilters(text=query.get(), show_id=show_id,
+                                                  season_number=season_number), PageRequest(page_var.get(), 50))
                 for item in result.items:
                     items.insert("", END, iid=str(item.item_id), values=(item.title,))
                 update_pager(result)
@@ -295,8 +308,8 @@ class InventoryPageMixin:
             update_pager = self._create_pager(form, page_var, load_items)
             timer = {}
             query.trace_add("write", lambda *_: (page_var.set(1), self._debounce(timer, load_items)))
-            ttk.Label(form, text="Mã vạch").pack(anchor="w")
-            ttk.Entry(form, textvariable=barcode).pack(fill=X)
+            ttk.Label(form, text="Số lượng (mã đĩa được tạo tự động)").pack(anchor="w")
+            ttk.Spinbox(form, textvariable=quantity, from_=1, to=1000000).pack(fill=X)
             controls = ttk.Frame(form)
             controls.pack(fill=X, pady=6)
             ttk.Label(controls, text="Định dạng").pack(side=LEFT)
@@ -315,9 +328,15 @@ class InventoryPageMixin:
                     messagebox.showinfo("Thêm đĩa", "Hãy chọn phim hoặc tập phim.", parent=dialog)
                     return
                 try:
-                    self.store.add_copy(int(selection[0]), barcode.get(), media.get(), self.account.employee_id, rentable.get(), sellable.get(), *(v.get() for v in location))
+                    try:
+                        count = int(quantity.get())
+                    except ValueError:
+                        raise ValueError("Số lượng phải là số nguyên dương.") from None
+                    created = self.store.add_copies(int(selection[0]), count, media.get(), self.account.employee_id, rentable.get(), sellable.get(), *(v.get() for v in location))
                     dialog.destroy()
                     refresh()
+                    messagebox.showinfo("Nhập kho", f"Đã thêm {len(created)} đĩa.\nMã: {created[0].barcode}"
+                                        + (f" … {created[-1].barcode}" if len(created) > 1 else ""), parent=self)
                 except Exception as exc:
                     messagebox.showerror("Thêm đĩa", str(exc), parent=dialog)
 
@@ -328,6 +347,23 @@ class InventoryPageMixin:
         ttk.Button(filters, text="Thêm đĩa", command=add_copy, state="normal" if self._can_manage() else "disabled").pack(side=LEFT, padx=4)
         def copy_menu(event):
             item = tree.identify_row(event.y)
+            if item in nodes:
+                kind, identifier = nodes[item]
+                if kind == "more":
+                    return
+                tree.selection_set(item)
+                tree.focus(item)
+                menu = tk.Menu(tree, tearoff=False)
+                if kind == "item":
+                    command = lambda: add_copy(item_id=identifier)
+                elif kind == "show":
+                    command = lambda: add_copy(show_id=identifier)
+                else:
+                    command = lambda: add_copy(show_id=identifier[0], season_number=identifier[1])
+                menu.add_command(label="Thêm đĩa", command=command,
+                                 state="normal" if self._can_manage() else "disabled")
+                menu.tk_popup(event.x_root, event.y_root)
+                return
             if item not in rows:
                 return
             tree.selection_set(item)

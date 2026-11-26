@@ -7,7 +7,7 @@ from ttkbootstrap.constants import BOTH, END, LEFT, X
 from ttkbootstrap.widgets.scrolled import ScrolledFrame
 
 from normastore.application.contracts import CatalogFilters, PageRequest, SortSpec
-from normastore.domain.enums import ItemType
+from normastore.domain.enums import ItemType, LineAction
 from normastore.ui.formatting import RESERVATION_LABELS, format_datetime, vnd
 
 
@@ -242,7 +242,8 @@ class ReservationsPageMixin:
                     values=(
                         reservation.customer_name,
                         reservation.item_title,
-                        RESERVATION_LABELS[reservation.state],
+                        ({LineAction.RENT: "Đã thuê", LineAction.BUY: "Đã mua"}.get(
+                            reservation.fulfilled_action, RESERVATION_LABELS[reservation.state])),
                         format_datetime(reservation.hold_until),
                     ),
                 )

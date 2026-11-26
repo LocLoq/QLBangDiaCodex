@@ -39,6 +39,19 @@ class CatalogQueries:
         rows = self.checkout_copies(item_id, action, excluded_copy_ids, limit=1)
         return rows[0] if rows else None
 
+    @staticmethod
+    def _checkout_status(customer_id=None):
+        allowed_status = PhysicalCopy.status == CopyStatus.AVAILABLE
+        if customer_id is not None:
+            own_hold = select(Reservation.id).where(
+                Reservation.allocated_copy_id == PhysicalCopy.id,
+                Reservation.customer_id == customer_id,
+                Reservation.state == ReservationState.HELD,
+                Reservation.hold_until > datetime.now(timezone.utc),
+            ).correlate(PhysicalCopy).exists()
+            allowed_status = allowed_status | ((PhysicalCopy.status == CopyStatus.HELD) & own_hold)
+        return allowed_status
+
     def checkout_copies(self, item_id, action, excluded_copy_ids, limit=None, customer_id=None):
         allowed = (
             PhysicalCopy.can_rent.is_(True)
@@ -50,15 +63,7 @@ class CatalogQueries:
             if action == LineAction.RENT
             else CatalogItem.can_sell.is_(True)
         )
-        allowed_status = PhysicalCopy.status == CopyStatus.AVAILABLE
-        if customer_id is not None:
-            own_hold = select(Reservation.id).where(
-                Reservation.allocated_copy_id == PhysicalCopy.id,
-                Reservation.customer_id == customer_id,
-                Reservation.state == ReservationState.HELD,
-                Reservation.hold_until > datetime.now(timezone.utc),
-            ).exists()
-            allowed_status = allowed_status | ((PhysicalCopy.status == CopyStatus.HELD) & own_hold)
+        allowed_status = self._checkout_status(customer_id)
         statement = (
             select(PhysicalCopy, CatalogItem)
             .join(CatalogItem)
@@ -137,14 +142,15 @@ class CatalogQueries:
             statement = statement.where(Season.season_number == season_number)
         return self.session.execute(statement).all()
 
-    def _catalog_statement(self, filters: CatalogFilters):
+    def _catalog_statement(self, filters: CatalogFilters, customer_id=None, *, for_checkout=False):
         released = or_(CatalogItem.release_date.is_(None), CatalogItem.release_date <= date.today())
+        allowed_status = self._checkout_status(customer_id)
         rentable = func.coalesce(
             func.sum(
                 case(
                     (
                         and_(
-                            PhysicalCopy.status == CopyStatus.AVAILABLE,
+                            allowed_status,
                             PhysicalCopy.can_rent.is_(True),
                             CatalogItem.can_rent.is_(True),
                             released,
@@ -161,7 +167,7 @@ class CatalogQueries:
                 case(
                     (
                         and_(
-                            PhysicalCopy.status == CopyStatus.AVAILABLE,
+                            allowed_status,
                             PhysicalCopy.can_sell.is_(True),
                             CatalogItem.can_sell.is_(True),
                             released,
@@ -231,10 +237,13 @@ class CatalogQueries:
                 .exists()
             )
             stmt = stmt.where(matching_copy)
-        if filters.require_rentable:
-            stmt = stmt.having(rentable > 0)
-        if filters.require_sellable:
-            stmt = stmt.having(sellable > 0)
+        if for_checkout and filters.require_rentable and filters.require_sellable:
+            stmt = stmt.having(or_(rentable > 0, sellable > 0))
+        else:
+            if filters.require_rentable:
+                stmt = stmt.having(rentable > 0)
+            if filters.require_sellable:
+                stmt = stmt.having(sellable > 0)
         if filters.item_rentable:
             stmt = stmt.where(CatalogItem.can_rent.is_(True))
         if filters.item_rentable_or_sellable:
@@ -301,8 +310,8 @@ class CatalogQueries:
             total_pages=total_pages,
         )
 
-    def query_checkout_catalog(self, filters=None, page_request=PageRequest(page_size=48), sort=SortSpec()):
-        items = self._catalog_statement(filters or CatalogFilters())[0].subquery()
+    def query_checkout_catalog(self, filters=None, page_request=PageRequest(page_size=48), sort=SortSpec(), customer_id=None):
+        items = self._catalog_statement(filters or CatalogFilters(), customer_id, for_checkout=True)[0].subquery()
         is_show = items.c.show_id.is_not(None)
         group_id = case((is_show, items.c.show_id), else_=items.c.id)
         title = func.max(case((is_show, Show.title), else_=items.c.title)).label("title")

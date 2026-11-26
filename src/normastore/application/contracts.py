@@ -94,6 +94,12 @@ class CheckoutLine:
 
 
 @dataclass(frozen=True)
+class CreatedCopy:
+    copy_id: int
+    barcode: str
+
+
+@dataclass(frozen=True)
 class PaymentInput:
     method: PaymentMethod
     amount: Decimal
@@ -353,6 +359,7 @@ class ReservationView:
     hold_until: datetime | None
     item_id: int | None = None
     show_id: int | None = None
+    fulfilled_action: LineAction | None = None
 
 
 @dataclass(frozen=True)
@@ -418,6 +425,7 @@ class OrderDetailLine:
     deposit: Decimal
     due_date: date | None
     rental_state: RentalState | None
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -446,6 +454,7 @@ class OrderReceiptLine:
     deposit: Decimal
     due_date: date | None
     rental_state: str | None
+    note: str | None = None
 
 
 @dataclass(frozen=True)

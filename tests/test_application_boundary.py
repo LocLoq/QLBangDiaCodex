@@ -13,18 +13,21 @@ from normastore.application.contracts import (
     AccountView,
     BusinessError,
     CatalogItemView,
+    CatalogFilters,
     CheckoutLine,
     CustomerView,
     PaymentInput,
     PageRequest,
 )
 from normastore.application.services import StoreService
+from normastore.application._operations import _StoreOperations
 from normastore.domain.enums import (
     CopyStatus,
     ItemType,
     LineAction,
     PaymentMethod,
     RentalState,
+    ReservationState,
     ReturnOutcome,
     RoleCode,
 )
@@ -39,6 +42,8 @@ from normastore.infrastructure.database.models import (
     RentalTerm,
     Reservation,
     ReturnReceipt,
+    Voucher,
+    CopyStatusHistory,
 )
 from normastore.infrastructure.database.unit_of_work import UnitOfWork
 from normastore.ui.shell import ShellMixin
@@ -173,6 +178,165 @@ def test_preorder_is_allocated_before_checkout_even_when_worker_has_not_run(stor
     assert store.checkout_copies(item.id, LineAction.RENT, customer_id=second.id) == []
     assert store.checkout_copies(item.id, LineAction.RENT, customer_id=first.id)[0].copy_id == copy.id
     assert store.quote(first.id, [line]).deposit > 0
+
+
+@pytest.mark.parametrize("sale_only", [False, True])
+def test_customer_preorders_flow_from_bulk_import_to_receipt(store, session, sale_only):
+    actor = store.authenticate("admin", "admin123").employee_id
+    first = store.add_customer("Khách nhận đặt trước", "0987111120")
+    second = store.add_customer("Khách chờ nhập tiếp", "0987111121")
+    item = store.save_catalog_item(actor, item_type="MOVIE", title="Đĩa đặt trước mới nhập",
+                                   can_rent=not sale_only, can_sell=True)
+    store.reserve(first.id, [item.id], actor)
+    store.reserve(second.id, [item.id], actor)
+    created = store.add_copies(item.id, 1, actor_id=actor, aisle="A", rack="2", compartment="3")
+    assert len(created) == 1 and created[0].barcode.startswith("DIA-")
+    choice, = store.customer_preorder_copies(first.id)
+    assert choice.copy_id == created[0].copy_id
+    assert (choice.aisle, choice.rack, choice.compartment) == ("A", "2", "3")
+    assert store.customer_preorder_copies(second.id) == []
+    assert choice.action == (LineAction.BUY if sale_only else LineAction.RENT)
+    lines = [CheckoutLine(choice.copy_id, choice.action,
+                           None if sale_only else date.today() + timedelta(days=3))]
+    quote = store.quote(first.id, lines)
+    # Cancelling at the quote stage must not consume the preorder.
+    assert len(store.customer_preorder_copies(first.id)) == 1
+    with pytest.raises(BusinessError, match="không được âm"):
+        store.checkout(first.id, actor, lines, [PaymentInput(PaymentMethod.CASH, Decimal("-1"))])
+    assert len(store.customer_preorder_copies(first.id)) == 1
+    order = store.checkout(first.id, actor, lines, [PaymentInput(PaymentMethod.CASH, quote.total_due)])
+    assert store.customer_preorder_copies(first.id) == []
+    assert store.order_receipt(order.id).lines[0].note == "Đặt trước"
+    assert store.order_detail(order.id)[1][0].note == "Đặt trước"
+    reservation = next(row for row in store.list_reservations() if row.item_id == item.id
+                       and row.customer_name == first.full_name)
+    assert reservation.state == ReservationState.FULFILLED
+    assert reservation.fulfilled_action == choice.action
+    session.expire_all()
+    fulfilled = session.query(Reservation).filter_by(customer_id=first.id, item_id=item.id).one()
+    assert fulfilled.fulfilled_line_id is not None
+    if not sale_only:
+        term = session.query(RentalTerm).filter_by(line_id=fulfilled.fulfilled_line_id).one()
+        store.return_rentals(actor, first.id, [(term.id, ReturnOutcome.NORMAL, "")])
+        next_choice, = store.customer_preorder_copies(second.id)
+        assert next_choice.copy_id == choice.copy_id
+        # The earlier customer's fulfillment keeps its original action after reuse.
+        historical = next(row for row in store.list_reservations()
+                          if row.reservation_id == reservation.reservation_id)
+        assert historical.fulfilled_action == LineAction.RENT
+        assert store.order_receipt(order.id).lines[0].note == "Đặt trước"
+
+
+def test_customer_preorders_allocate_release_and_expire_without_worker(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    first = store.add_customer("Khách giữ hết hạn", "0987111122")
+    second = store.add_customer("Khách được chuyển lượt", "0987111123")
+    item = store.save_catalog_item(actor, item_type="MOVIE", title="Phim chờ ngày phát hành",
+                                   release_date=date.today() + timedelta(days=1))
+    created, = store.add_copies(item.id, 1, actor_id=actor)
+    store.reserve(first.id, [item.id], actor)
+    store.reserve(second.id, [item.id], actor)
+    assert store.customer_preorder_copies(first.id) == []
+    store.save_catalog_item(actor, id=item.id, release_date=date.today())
+    assert store.customer_preorder_copies(first.id)[0].copy_id == created.copy_id
+    session.expire_all()
+    held = session.query(Reservation).filter_by(customer_id=first.id, item_id=item.id).one()
+    held.hold_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    session.flush()
+    assert store.customer_preorder_copies(second.id)[0].copy_id == created.copy_id
+    assert store.customer_preorder_copies(first.id) == []
+
+
+@pytest.mark.parametrize("is_episode", [False, True])
+@pytest.mark.parametrize("can_rent,can_sell", [(True, True), (True, False), (False, True)])
+def test_checkout_catalog_includes_own_hold_and_keeps_customer_caches_separate(
+    store, session, is_episode, can_rent, can_sell,
+):
+    actor = store.authenticate("admin", "admin123").employee_id
+    owner = store.add_customer("Khách tìm phim đã đặt", "0987111142")
+    other = store.add_customer("Khách chưa đặt phim", "0987111143")
+    title = "PREORDER-SEARCH phim đang giữ"
+    if is_episode:
+        show = store.create_show(title, actor_id=actor)
+        episode, = store.add_episodes_bulk(show.id, 1, 1, 1, actor_id=actor)
+        item = store.save_catalog_item(actor, id=episode.id, can_rent=can_rent, can_sell=can_sell)
+    else:
+        item = store.save_catalog_item(actor, item_type="MOVIE", title=title,
+                                      can_rent=can_rent, can_sell=can_sell)
+    filters = CatalogFilters(text=title, require_rentable=True, require_sellable=True)
+    store.reserve(owner.id, [item.id], actor)
+    store.add_copies(item.id, 1, actor_id=actor)
+    assert store.query_checkout_catalog(filters).total_items == 0
+    assert store.query_checkout_catalog(filters, customer_id=other.id).total_items == 0
+    result = store.query_checkout_catalog(filters, customer_id=owner.id)
+    assert result.total_items == 1
+    row, = result.items
+    assert row.item_id == item.id
+    assert row.rentable_copies == int(can_rent)
+    assert row.sellable_copies == int(can_sell)
+    assert store.query_checkout_catalog(filters, customer_id=other.id).total_items == 0
+    assert store.query_checkout_catalog(filters, customer_id=owner.id) == result
+    # General catalog availability remains global; only checkout includes an owner's hold.
+    assert store.query_catalog(CatalogFilters(text=title)).items[0].rentable_copies == 0
+    session.expire_all()
+    held = session.query(Reservation).filter_by(customer_id=owner.id, item_id=item.id).one()
+    held.hold_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+    session.flush()
+    store.invalidate_cache()
+    assert store.query_checkout_catalog(filters, customer_id=owner.id).total_items == 0
+
+
+@pytest.mark.parametrize("quantity", [0, -1, 1.5, True, "2"])
+def test_bulk_import_rejects_invalid_quantity(store, quantity):
+    actor = store.authenticate("admin", "admin123").employee_id
+    item = store.save_catalog_item(actor, item_type="MOVIE", title="Kiểm tra số lượng nhập")
+    with pytest.raises(BusinessError, match="số nguyên dương"):
+        store.add_copies(item.id, quantity, actor_id=actor)
+
+
+def test_bulk_import_failure_rolls_back_copies_audit_and_holds(store, session, monkeypatch):
+    actor = store.authenticate("admin", "admin123").employee_id
+    customer = store.add_customer("Khách chờ nhập lỗi", "0987111124")
+    item = store.save_catalog_item(actor, item_type="MOVIE", title="Lô nhập cần hoàn tác")
+    reservation, = store.reserve(customer.id, [item.id], actor)
+    original = _StoreOperations.add_copy
+    imported_ids = []
+
+    def fail_second(operations, *args, **kwargs):
+        if imported_ids:
+            raise BusinessError("Lỗi thử nghiệm giữa lô")
+        copy = original(operations, *args, **kwargs)
+        imported_ids.append(copy.id)
+        return copy
+
+    monkeypatch.setattr(_StoreOperations, "add_copy", fail_second)
+    with pytest.raises(BusinessError, match="giữa lô"):
+        store.add_copies(item.id, 3, actor_id=actor)
+    session.expire_all()
+    assert session.query(PhysicalCopy).filter_by(item_id=item.id).count() == 0
+    assert session.query(CopyStatusHistory).filter(CopyStatusHistory.copy_id.in_(imported_ids)).count() == 0
+    assert session.query(AuditLog).filter_by(action="ADD_COPY", entity_id=str(imported_ids[0])).count() == 0
+    held = session.get(Reservation, reservation.id)
+    assert held.state == ReservationState.WAITING and held.allocated_copy_id is None
+
+
+def test_bulk_codes_and_generated_vouchers_preserve_existing_codes(store, session, monkeypatch):
+    import re
+
+    actor = store.authenticate("admin", "admin123").employee_id
+    item = store.save_catalog_item(actor, item_type="MOVIE", title="Mã đĩa tự sinh")
+    legacy = store.add_copy(item.id, "DIA-AAAAAAAAAAAA", actor_id=actor)
+    store.create_voucher("VC-AAAAAAAAAAAA", actor, percent_off=Decimal("5"))
+    tokens = iter(["aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc",
+                   "aaaaaaaaaaaa", "dddddddddddd"])
+    monkeypatch.setattr("normastore.application._operations.token_hex", lambda _size: next(tokens))
+    created = store.add_copies(item.id, 2, actor_id=actor)
+    voucher = store.create_voucher_from_text(None, "10", actor)
+    assert len({copy.barcode for copy in created}) == 2
+    assert all(re.fullmatch(r"DIA-[0-9A-F]{12}", copy.barcode) for copy in created)
+    session.expire_all()
+    assert session.get(PhysicalCopy, legacy.id).barcode == "DIA-AAAAAAAAAAAA"
+    assert session.get(Voucher, voucher.id).code == "VC-DDDDDDDDDDDD"
 
 
 @pytest.mark.parametrize("entry_point", ["quote", "choices"])

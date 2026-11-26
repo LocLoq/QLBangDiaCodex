@@ -19,4 +19,5 @@ class Reservation(Base, Timestamped):
     )
     hold_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     allocated_copy_id: Mapped[int | None] = mapped_column(ForeignKey("physical_copies.id"))
+    fulfilled_line_id: Mapped[int | None] = mapped_column(ForeignKey("order_lines.id"))
     __table_args__ = (Index("ix_reservation_item_state_created", "item_id", "state", "created_at"),)

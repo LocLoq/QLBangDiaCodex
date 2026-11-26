@@ -95,7 +95,8 @@ class PdfReceiptExporter:
                 rental = f"{self._date(line.due_date)}<br/>{self._rental_state(line.rental_state)}"
                 rows.append([
                     Paragraph(str(index), center),
-                    Paragraph(f"{line.title}<br/><font size='7'>{line.barcode or '—'}</font>", body),
+                    Paragraph(f"{line.title}<br/><font size='7'>{line.barcode or '—'}</font>"
+                              + (f"<br/>{line.note}" if line.note else ""), body),
                     Paragraph(self._action(line.action), center), Paragraph(self._money(line.unit_price), right),
                     Paragraph(self._money(line.discount_amount), right), Paragraph(self._money(line.net_amount), right),
                     Paragraph(self._money(line.deposit), right), Paragraph(rental, body),
@@ -109,6 +110,8 @@ class PdfReceiptExporter:
                     f"Giá {self._money(line.unit_price)} • Giảm {self._money(line.discount_amount)} • Cọc {self._money(line.deposit)}<br/>"
                     f"Hạn trả: {self._date(line.due_date)} {self._rental_state(line.rental_state)}"
                 )
+                if line.note:
+                    detail += f"<br/>{line.note}"
                 rows.append([Paragraph(detail, body), Paragraph(self._money(line.net_amount + line.deposit), right)])
             table = Table(rows, colWidths=[51 * mm, 21 * mm], repeatRows=1)
         table.setStyle(TableStyle([
