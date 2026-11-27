@@ -14,13 +14,13 @@ def test_tooltip_position_flips_and_clamps_at_virtual_screen_edges():
     assert tooltip_position(-990, -790, 180, 120, -1000, -800, 1000, 800) == (-974, -774)
 
 
-def test_dark_palette_is_readable_and_uses_slate_surface():
+def test_dark_palette_uses_ink_and_blue():
     palette = theme_palette(True)
 
-    assert palette.background == "#2B3E50"
-    assert palette.surface == "#32465A"
+    assert palette.background == "#111D2B"
+    assert palette.surface == "#1C2D3E"
     assert palette.foreground == "#F8FAFC"
-    assert palette.muted == "#C4CED8"
+    assert palette.muted == "#BFCDDA"
 
 
 def test_darkly_preference_migrates_to_superhero(tmp_path, monkeypatch):
@@ -52,8 +52,8 @@ def test_figure_restyles_after_axis_clear():
     axis.clear()
     AppearanceMixin._style_figure(app, figure)
 
-    assert figure.get_facecolor()[:3] == (43 / 255, 62 / 255, 80 / 255)
-    assert axis.get_facecolor()[:3] == (43 / 255, 62 / 255, 80 / 255)
+    assert figure.get_facecolor()[:3] == (17 / 255, 29 / 255, 43 / 255)
+    assert axis.get_facecolor()[:3] == (17 / 255, 29 / 255, 43 / 255)
     assert axis.title.get_color() == "#F8FAFC"
 
 

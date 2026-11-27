@@ -5,7 +5,8 @@ from datetime import date, timedelta
 from decimal import Decimal
 from tkinter import messagebox, simpledialog, ttk
 
-from ttkbootstrap.constants import LEFT, X
+from ttkbootstrap.constants import BOTH, LEFT, X
+from ttkbootstrap.widgets.scrolled import ScrolledFrame
 
 from normastore.application.contracts import MockSeedRequest
 
@@ -13,6 +14,9 @@ from normastore.application.contracts import MockSeedRequest
 class SettingsPageMixin:
     def settings_page(self, page) -> None:
         self._heading(page, "Cài đặt & Giới thiệu", "Kết nối, khóa truy cập và thông tin nguồn")
+        content = ScrolledFrame(page, autohide=True, padding=(0, 0, 12, 12))
+        content.pack(fill=BOTH, expand=True)
+        page = content
         ttk.Label(
             page,
             text=f"Database: {self.settings.database_url}\n\nTMDB/Gemini/SMTP không được hard-code. Đặt biến môi trường NORMASTORE_* hoặc lưu secret bằng Windows Credential Manager.\n\nThis product uses the TMDB API but is not endorsed or certified by TMDB.",

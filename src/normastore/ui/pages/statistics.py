@@ -26,7 +26,9 @@ class StatisticsPageMixin:
         from matplotlib.figure import Figure
 
         root_page = page
-        heading = self._heading(page, "Thống kê", "Doanh thu phát sinh tách hoàn toàn tiền cọc")
+        self._heading(page, "Thống kê", "Doanh thu phát sinh tách hoàn toàn tiền cọc")
+        heading = ttk.Frame(page)
+        heading.pack(fill=X, pady=(0, 8))
         period_var = tk.StringVar(value="Tháng này")
         ttk.Label(heading, text="Kỳ:").pack(side=LEFT)
         ttk.Combobox(
@@ -96,8 +98,8 @@ class StatisticsPageMixin:
         top_tabs.add(rental_tab, text="Top thuê")
         top_tabs.add(sale_tab, text="Top bán")
         top_tabs.add(customer_tab, text="Top khách hàng")
-        top_tabs.add(combo_tab, text="Top combo")
-        top_tabs.add(voucher_tab, text="Top voucher")
+        top_tabs.add(combo_tab, text="Combo")
+        top_tabs.add(voucher_tab, text="Voucher")
         top_tree = self._create_treeview(
             rental_tab, columns=("count",), show="tree headings", height=11
         )
@@ -142,10 +144,11 @@ class StatisticsPageMixin:
             overdue_frame, columns=("count", "fee"), show="tree headings", height=11
         )
         overdue_tree.heading("#0", text="Khách hàng")
-        overdue_tree.heading("count", text="Đĩa quá hạn")
-        overdue_tree.heading("fee", text="Phạt hiện tại")
-        overdue_tree.column("count", width=90, anchor="e")
-        overdue_tree.column("fee", width=130, anchor="e")
+        overdue_tree.heading("count", text="Đĩa trễ")
+        overdue_tree.heading("fee", text="Tiền phạt")
+        overdue_tree.column("#0", width=138, minwidth=115, anchor="w")
+        overdue_tree.column("count", width=115, minwidth=100, anchor="e")
+        overdue_tree.column("fee", width=130, minwidth=116, anchor="e")
         overdue_tree.pack(fill=BOTH, expand=True)
         stockout_tree = self._create_treeview(
             stockout_frame, columns=("eta",), show="tree headings", height=11
@@ -574,6 +577,7 @@ class StatisticsPageMixin:
             else:
                 axis.text(0.5, 0.5, "Kho chưa có đĩa", ha="center", transform=axis.transAxes)
             axis.set_title("Trạng thái tồn kho")
+            self._style_figure(figure)
             figure.tight_layout()
             chart.draw_idle()
 
@@ -583,9 +587,6 @@ class StatisticsPageMixin:
             revenue_axis.clear()
             damage_axis.clear()
             genre_axis.clear()
-            self._style_figure(analysis_figure)
-            self._style_figure(revenue_figure)
-            self._style_figure(damage_figure)
             dates = sorted({day for day, _action, _amount in chart_data.revenue})
             if dates:
                 by_day = {(day, action): amount for day, action, amount in chart_data.revenue}
@@ -629,6 +630,8 @@ class StatisticsPageMixin:
                 genre_axis.text(0.5, 0.5, "Không có lượt bán", ha="center", transform=genre_axis.transAxes)
             genre_axis.set_title("Thể loại bán chạy")
             genre_axis.set_xlabel("Số lượt bán")
+            for detailed_figure in (analysis_figure, revenue_figure, damage_figure):
+                self._style_figure(detailed_figure)
             analysis_figure.tight_layout()
             analysis_chart.draw_idle()
             revenue_figure.tight_layout()

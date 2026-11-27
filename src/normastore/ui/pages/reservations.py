@@ -20,7 +20,7 @@ class ReservationsPageMixin:
         search_field = tk.StringVar(value="name")
         for label, value in (("Tên khách", "name"), ("SĐT", "phone"), ("Phim", "movie")):
             ttk.Radiobutton(search_row, text=label, variable=search_field, value=value).pack(side=LEFT, padx=2)
-        ttk.Entry(search_row, textvariable=search, width=34).pack(side=LEFT, padx=6)
+        ttk.Entry(search_row, textvariable=search, width=24).pack(side=LEFT, padx=6, fill=X, expand=True)
         states = {"Đang chờ hoặc đang giữ": (ReservationState.WAITING, ReservationState.HELD),
                   "Tất cả": None, "Đang chờ": ReservationState.WAITING,
                   "Đang giữ": ReservationState.HELD, "Đã thuê": ReservationState.FULFILLED,
@@ -45,6 +45,8 @@ class ReservationsPageMixin:
             ("hold", "Giữ đến"),
         ]:
             tree.heading(column, text=title)
+        tree.column("customer", anchor="w")
+        tree.column("item", anchor="w")
         tree.pack(fill=BOTH, expand=True)
         cards = ScrolledFrame(list_area, autohide=False)
         bottom = ttk.Frame(page)

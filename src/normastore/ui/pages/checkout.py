@@ -26,26 +26,30 @@ class CheckoutPageMixin:
         top.pack(fill=X, pady=(0, 8))
         customer_var = tk.StringVar()
         customer_search_var = tk.StringVar()
-        customer_combo = ttk.Combobox(top, textvariable=customer_var, state="readonly", width=38)
+        dates = ttk.Frame(top)
+        dates.pack(side=RIGHT, padx=(12, 0))
+        ttk.Label(dates, text="Hạn trả:").pack(side=LEFT, padx=(0, 4))
+        due_entry = tb.DateEntry(dates, dateformat="%d/%m/%Y", startdate=date.today() + timedelta(days=3), popup_title="Chọn hạn trả", width=11)
+        due_entry.pack(side=LEFT)
+        customer_combo = ttk.Combobox(top, textvariable=customer_var, state="readonly", width=21)
         ttk.Label(top, text="Khách hàng:").pack(side=LEFT)
-        ttk.Entry(top, textvariable=customer_search_var, width=18).pack(side=LEFT, padx=(6, 0))
-        customer_combo.pack(side=LEFT, padx=6)
+        ttk.Entry(top, textvariable=customer_search_var, width=12).pack(side=LEFT, padx=(6, 0))
+        customer_combo.pack(side=LEFT, padx=6, fill=X, expand=True)
         ttk.Button(
             top, text="Thêm khách", command=lambda: self._quick_customer(customer_combo, on_saved=select_new_customer)
         ).pack(side=LEFT)
-        ttk.Label(top, text="Hạn trả:").pack(side=LEFT, padx=(18, 3))
-        due_entry = tb.DateEntry(top, dateformat="%d/%m/%Y", startdate=date.today() + timedelta(days=3), popup_title="Chọn hạn trả", width=11)
-        due_entry.pack(side=LEFT)
         voucher_var = tk.StringVar()
         combo_var = tk.StringVar()
         premium_var = tk.StringVar(value="Không đăng ký")
         premium_period = tk.StringVar(value="")
         customer_details = tk.StringVar(value="Chọn khách hàng để xem thông tin.")
-        ttk.Label(page, textvariable=customer_details, wraplength=1100, justify=LEFT).pack(anchor="w", pady=(0, 6))
+        details = ttk.Label(page, textvariable=customer_details, justify=LEFT, bootstyle="secondary")
+        details.pack(fill=X, pady=(0, 6))
+        details.bind("<Configure>", lambda event: details.configure(wraplength=event.width), add="+")
         pane = ttk.Panedwindow(page, orient="horizontal")
         pane.pack(fill=BOTH, expand=True)
-        catalog_frame = ttk.Frame(pane, padding=5, width=550)
-        cart_frame = ttk.Frame(pane, padding=5, width=380)
+        catalog_frame = ttk.Frame(pane, padding=(0, 6, 6, 0), width=550)
+        cart_frame = ttk.Frame(pane, padding=(8, 6, 0, 0), width=380)
         catalog_frame.pack_propagate(False)
         cart_frame.pack_propagate(False)
         pane.add(catalog_frame, weight=3)
@@ -56,26 +60,32 @@ class CheckoutPageMixin:
         picker_view, picker_page = tk.StringVar(value="Danh sách"), tk.IntVar(value=1)
         picker_filters = ttk.Labelframe(catalog_frame, text="Tìm phim / tập", padding=(8, 5))
         picker_filters.pack(fill=X, pady=(0, 5))
-        ttk.Label(picker_filters, text="Từ khóa:").pack(side=LEFT)
-        ttk.Entry(picker_filters, textvariable=search, width=25).pack(
+        search_row = ttk.Frame(picker_filters)
+        search_row.pack(fill=X)
+        filter_actions = ttk.Frame(picker_filters)
+        filter_actions.pack(fill=X, pady=(4, 0))
+        availability = ttk.Frame(picker_filters)
+        availability.pack(fill=X, pady=(4, 0))
+        ttk.Label(search_row, text="Từ khóa:").pack(side=LEFT)
+        ttk.Entry(search_row, textvariable=search, width=18).pack(
             side=LEFT, padx=4, fill=X, expand=True
         )
-        ttk.Label(picker_filters, text="Loại:").pack(side=LEFT)
+        ttk.Label(search_row, text="Loại:").pack(side=LEFT)
         ttk.Combobox(
-            picker_filters,
+            search_row,
             textvariable=picker_type,
             values=tuple(item_types),
             width=11,
             state="readonly",
         ).pack(side=LEFT, padx=4)
-        ttk.Checkbutton(picker_filters, text="Còn thuê", variable=picker_rent).pack(
+        ttk.Checkbutton(availability, text="Còn thuê", variable=picker_rent).pack(
             side=LEFT, padx=4
         )
-        ttk.Checkbutton(picker_filters, text="Còn mua", variable=picker_sell).pack(
+        ttk.Checkbutton(availability, text="Còn mua", variable=picker_sell).pack(
             side=LEFT, padx=4
         )
         ttk.Combobox(
-            picker_filters,
+            filter_actions,
             textvariable=picker_view,
             values=("Danh sách", "Thẻ"),
             width=12,
@@ -121,12 +131,12 @@ class CheckoutPageMixin:
                 picker_advanced_button.configure(text="Thu gọn ▴")
 
         picker_advanced_button = ttk.Button(
-            picker_filters,
+            filter_actions,
             text="Lọc nâng cao ▾",
             command=toggle_picker_advanced,
             bootstyle="secondary",
         )
-        picker_advanced_button.pack(side=RIGHT, padx=5)
+        picker_advanced_button.pack(side=LEFT, padx=(0, 5))
         def clear_picker_filters():
             for variable in (
                 search, picker_genre, picker_year_from, picker_year_to, picker_rating,
@@ -140,8 +150,8 @@ class CheckoutPageMixin:
             picker_show_control.configure(values=tuple(picker_shows))
 
         ttk.Button(
-            picker_filters, text="Xóa bộ lọc", command=clear_picker_filters, bootstyle="secondary"
-        ).pack(side=RIGHT, padx=5)
+            filter_actions, text="Xóa bộ lọc", command=clear_picker_filters, bootstyle="secondary"
+        ).pack(side=LEFT)
         for index, (label, variable, values, width) in enumerate((
             ("Thể loại", picker_genre, tuple(picker_genres), 14),
             ("Từ năm", picker_year_from, (), 6),
@@ -194,11 +204,15 @@ class CheckoutPageMixin:
             columns=("rentable_copies", "sellable_copies", "rent", "buy"),
             show="tree headings",
         )
-        catalog.column("#0", width=260)
-        catalog.column("rentable_copies", width=78)
-        catalog.column("sellable_copies", width=78)
-        catalog.column("rent", width=88)
-        catalog.column("buy", width=88)
+        catalog.column("#0", width=190, anchor="w")
+        catalog.column("rentable_copies", width=105, minwidth=78, anchor="e")
+        catalog.column("sellable_copies", width=105, minwidth=78, anchor="e")
+        catalog.column("rent", width=103, anchor="e")
+        catalog.column("buy", width=103, anchor="e")
+        catalog_actions = ttk.Frame(catalog_frame)
+        catalog_actions.pack(side="bottom", fill=X, pady=(5, 0))
+        add_buttons = ttk.Frame(catalog_actions)
+        add_buttons.pack(fill=X)
         catalog.pack(fill=BOTH, expand=True)
         picker_cards = ttk.Frame(catalog_frame)
         picker_canvas = tk.Canvas(picker_cards, highlightthickness=0)
@@ -219,7 +233,7 @@ class CheckoutPageMixin:
             lambda event: picker_canvas.itemconfigure(picker_window, width=event.width),
         )
         ttk.Label(
-            cart_frame, text="Giỏ phiếu", font=("Segoe UI", 14, "bold"), bootstyle="primary"
+            cart_frame, text="Giỏ phiếu", style="Norma.Section.TLabel"
         ).pack(anchor="w")
         cart = self._create_treeview(
             cart_frame, columns=("action", "price", "due", "note"), show="tree headings"
@@ -229,12 +243,12 @@ class CheckoutPageMixin:
         cart.heading("price", text="Giá")
         cart.heading("due", text="Hạn trả")
         cart.heading("note", text="Ghi chú")
-        cart.column("note", width=85, minwidth=65)
-        cart.column("#0", width=140, minwidth=70)
-        cart.column("action", width=65)
-        cart.column("price", width=75, minwidth=50)
-        cart.column("due", width=75, minwidth=55)
-        summary = ttk.Frame(cart_frame, padding=(0, 5))
+        cart.column("note", width=82, minwidth=65)
+        cart.column("#0", width=94, minwidth=70, anchor="w")
+        cart.column("action", width=56)
+        cart.column("price", width=81, minwidth=50, anchor="e")
+        cart.column("due", width=95, minwidth=65)
+        summary = ScrolledFrame(cart_frame, height=130, autohide=False, padding=(0, 4, 23, 4))
         summary.columnconfigure(1, weight=1)
         amounts = {name: tk.StringVar(value="0 đ") for name in ("gross", "voucher", "combo", "premium", "discovery", "deposit", "premium_fee")}
         ttk.Label(summary, text="Tổng trước giảm giá:").grid(row=0, column=0, sticky="w")
@@ -258,12 +272,14 @@ class CheckoutPageMixin:
         ttk.Label(summary, textvariable=amounts["premium_fee"]).grid(row=6, column=2, sticky="e")
         ttk.Label(summary, textvariable=premium_period).grid(row=7, column=0, columnspan=3, sticky="w")
         total_var = tk.StringVar(value="Tổng cần thu: 0 đ")
+        checkout_bar = ttk.Frame(cart_frame)
+        checkout_bar.pack(side="bottom", fill=X)
         total_label = ttk.Label(
-            cart_frame, textvariable=total_var, font=("Segoe UI", 11, "bold"), bootstyle="success"
+            checkout_bar, textvariable=total_var, style="Norma.Total.TLabel", padding=(10, 4)
         )
+        total_label.pack(side=LEFT, fill=X, expand=True)
         buttons = ttk.Frame(cart_frame)
-        buttons.pack(side="bottom", fill=X)
-        total_label.pack(side="bottom", anchor="e", pady=6)
+        buttons.pack(side="bottom", fill=X, pady=(4, 6))
         summary.pack(side="bottom", fill=X)
         cart.pack(fill=BOTH, expand=True)
         cart_lines: list[CheckoutLine] = []
@@ -729,7 +745,7 @@ class CheckoutPageMixin:
                 prepare(initial_action)
             return dialog
 
-        ttk.Button(picker_filters, text="Chọn phim bộ", command=lambda: select_season()).pack(side=RIGHT, padx=4)
+        ttk.Button(availability, text="Chọn phim bộ", command=lambda: select_season()).pack(side=RIGHT)
 
         def update_quote():
             for variable in amounts.values():
@@ -828,21 +844,21 @@ class CheckoutPageMixin:
                 messagebox.showerror("Phiếu", str(exc), parent=self)
 
         rent_button = ttk.Button(
-            buttons, text="+ Thuê", command=lambda: add(LineAction.RENT), bootstyle="primary"
+            add_buttons, text="+ Thuê", command=lambda: add(LineAction.RENT), bootstyle="primary"
         )
         buy_button = ttk.Button(
-            buttons, text="+ Mua", command=lambda: add(LineAction.BUY), bootstyle="success"
+            add_buttons, text="+ Mua", command=lambda: add(LineAction.BUY), bootstyle="success"
         )
         remove_button = ttk.Button(buttons, text="Xóa dòng", command=remove, bootstyle="secondary")
-        rent_button.pack(side=LEFT, padx=2)
-        buy_button.pack(side=LEFT, padx=2)
-        remove_button.pack(side=LEFT, padx=2)
-        ttk.Button(buttons, text="Xóa tất cả", command=clear_cart, bootstyle="secondary").pack(side=LEFT, padx=2)
+        clear_button = ttk.Button(buttons, text="Xóa tất cả", command=clear_cart, bootstyle="secondary")
+        for button in (rent_button, buy_button, remove_button, clear_button):
+            button.configure(padding=(5, 4))
+            button.pack(side=LEFT, padx=(0, 3))
         cart.bind("<Delete>", lambda _event: remove())
-        ttk.Button(buttons, text="Hoàn tất", command=checkout, bootstyle="warning").pack(
+        ttk.Button(checkout_bar, text="Hoàn tất", command=checkout, bootstyle="primary").pack(
             side=RIGHT, padx=2
         )
-        picker_pager = self._create_pager(catalog_frame, picker_page, refresh_catalog)
+        picker_pager = self._create_pager(catalog_actions, picker_page, refresh_catalog)
 
         def update_action_buttons(_event=None):
             item = catalog_rows.get(catalog.selection()[0]) if catalog.selection() else None
@@ -856,8 +872,8 @@ class CheckoutPageMixin:
                 "#0": "Phim / tập",
                 "rentable_copies": "Sẵn thuê",
                 "sellable_copies": "Sẵn mua",
-                "rent": "Giá gốc thuê",
-                "buy": "Giá gốc mua",
+                "rent": "Giá thuê",
+                "buy": "Giá mua",
             },
             picker_sort,
             lambda: (picker_page.set(1), refresh_catalog()),

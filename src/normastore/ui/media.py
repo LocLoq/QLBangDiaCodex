@@ -65,11 +65,11 @@ class PosterMixin:
             return str(target)
         return prepare
 
-    def _load_poster_thumbnail(self, poster_path, label) -> None:
+    def _load_poster_thumbnail(self, poster_path, label, *, size: tuple[int, int] = (82, 116)) -> None:
         if not poster_path:
             return
         target = self.poster_cache.path_for(poster_path)
-        cache_key = str(target)
+        cache_key = f"{target}|{size[0]}x{size[1]}"
         label._poster_request = cache_key
 
         def apply_thumbnail(path) -> None:
@@ -77,7 +77,7 @@ class PosterMixin:
                 return
             try:
                 with Image.open(path) as image:
-                    image.thumbnail((82, 116))
+                    image.thumbnail(size)
                     thumbnail = ImageTk.PhotoImage(image.copy())
             except Exception:
                 return

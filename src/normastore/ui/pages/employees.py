@@ -14,13 +14,14 @@ class EmployeesPageMixin:
             page, "Nhân viên", "Quản lý nhân viên và tài khoản"
         )
         info = tk.StringVar()
-        ttk.Label(page, textvariable=info, font=("Segoe UI", 13)).pack(anchor="w", pady=12)
+        ttk.Label(page, textvariable=info, style="Norma.Section.TLabel").pack(anchor="w", pady=(0, 8))
         actions = ttk.Frame(page)
         actions.pack(fill=X)
         employees_tree = self._create_treeview(
             page, columns=("phone", "username", "role", "state"), show="tree headings", height=10
         )
         employees_tree.heading("#0", text="Nhân viên")
+        employees_tree.column("#0", anchor="w")
         employees_tree.heading("phone", text="Điện thoại")
         employees_tree.heading("username", text="Tài khoản")
         employees_tree.heading("role", text="Vai trò")

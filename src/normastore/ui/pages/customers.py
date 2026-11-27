@@ -21,6 +21,7 @@ class CustomersPageMixin:
             page, columns=("phone", "email", "premium"), show="tree headings"
         )
         tree.heading("#0", text="Khách hàng")
+        tree.column("#0", anchor="w")
         tree.heading("phone", text="Số điện thoại")
         tree.heading("email", text="Email")
         tree.heading("premium", text="Premium")

@@ -36,15 +36,15 @@ class ShellMixin:
     def _login(self) -> None:
         # Keep the action area outside the expanding form.  At 125–150% DPI a
         # 330px client area is too short and used to clip the submit button.
-        login = self._dialog("Đăng nhập NormaStore", 440, 410)
-        login.minsize(400, 390)
+        login = self._dialog("Đăng nhập NormaStore", 440, 430)
+        login.minsize(400, 410)
         login.resizable(False, False)
         frame = ttk.Frame(login, padding=(28, 24, 28, 12))
         frame.pack(fill=BOTH, expand=True)
         ttk.Label(
-            frame, text="NormaStore", font=("Segoe UI", 22, "bold"), bootstyle="primary"
+            frame, text="NormaStore", font=("Georgia", 28, "bold"), bootstyle="primary"
         ).pack(anchor="w")
-        ttk.Label(frame, text="Quản lý băng đĩa truyền thống", font=("Segoe UI", 10)).pack(
+        ttk.Label(frame, text="Quản lý cửa hàng băng đĩa", bootstyle="secondary").pack(
             anchor="w", pady=(0, 18)
         )
         user_var, pass_var = tk.StringVar(value="admin"), tk.StringVar(value="admin123")
@@ -72,14 +72,14 @@ class ShellMixin:
         footer = ttk.Frame(login, padding=(28, 0, 28, 24))
         footer.pack(fill=X, side="bottom")
         ttk.Button(footer, text="Đăng nhập", command=submit, bootstyle="primary").pack(fill=X)
+        user_entry.bind("<Return>", lambda _event: pass_entry.focus_set())
         pass_entry.bind("<Return>", submit)
-        login.protocol("WM_DELETE_WINDOW", self.destroy)
-        user_entry.focus_set()
+        login.protocol("WM_DELETE_WINDOW", self._close)
+        login.after_idle(user_entry.focus_set)
 
     def _build_shell(self) -> None:
         self._build_menu()
         outer = ttk.Frame(self)
-        outer.pack(fill=BOTH, expand=True)
         self.pages = {}
         self._active_page = ""
         self._drawer_pinned = False
@@ -91,7 +91,7 @@ class ShellMixin:
         self._home_clicks = 0
         self._navigation_icon_images: dict[str, ImageTk.PhotoImage] = {}
 
-        self.sidebar = ttk.Frame(outer, padding=(6, 10), width=_RAIL_WIDTH)
+        self.sidebar = ttk.Frame(outer, padding=(6, 10), width=_RAIL_WIDTH, style="Norma.Nav.TFrame")
         self.sidebar.pack(side=LEFT, fill=Y)
         self.sidebar.pack_propagate(False)
         self._add_navigation_button(
@@ -101,7 +101,7 @@ class ShellMixin:
             "<Enter>", lambda _event: self._open_drawer(temporary=True), add="+"
         )
 
-        self.drawer = ttk.Frame(outer, padding=(12, 14), width=_DRAWER_WIDTH)
+        self.drawer = ttk.Frame(outer, padding=(12, 14), width=_DRAWER_WIDTH, style="Norma.Nav.TFrame")
         self.drawer.pack_propagate(False)
         self.drawer.bind("<Leave>", self._schedule_drawer_close, add="+")
         drawer_header = ttk.Frame(self.drawer)
@@ -113,7 +113,7 @@ class ShellMixin:
         drawer_hamburger.pack_forget()
         drawer_hamburger.pack(side=LEFT)
         ttk.Label(
-            drawer_header, text="ĐIỀU HƯỚNG", bootstyle="secondary", font=self._font("small")
+            drawer_header, text="Điều hướng", style="Norma.Section.TLabel"
         ).pack(side=LEFT, padx=(8, 0))
 
         for label, glyph, builder_name, restricted in _NAVIGATION_ITEMS:
@@ -171,6 +171,7 @@ class ShellMixin:
         status_bar.pack(fill=X, side="bottom")
         ttk.Button(status_bar, text="Làm mới", command=self._refresh_current_page, bootstyle="link").pack(side=RIGHT, padx=6)
         ttk.Label(status_bar, textvariable=self.status, padding=(12, 6), anchor="w", bootstyle="secondary").pack(side=LEFT, fill=X, expand=True)
+        outer.pack(fill=BOTH, expand=True)
         self._refresh_status()
         self._apply_ui_style()
         self._schedule_notification_worker()
@@ -181,16 +182,15 @@ class ShellMixin:
         self, parent, glyph: str, label: str, *, command, icon_only: bool = False
     ) -> None:
         button = ttk.Button(
-            parent, text="" if icon_only else label, command=command, bootstyle="link"
+            parent, text="" if icon_only else label, command=command, style="Norma.Nav.TButton"
         )
         button.configure(compound="left")
         if icon_only:
             button.configure(padding=0)
         button.pack(fill=X, pady=1)
         self._nav_icon_widgets.append((button, glyph))
-        if not icon_only:
-            self._nav_buttons.setdefault(label, []).append(button)
-        else:
+        self._nav_buttons.setdefault(label, []).append(button)
+        if icon_only:
             Tooltip(button, label)
 
     def _navigation_icon(self, glyph: str) -> ImageTk.PhotoImage:
@@ -361,7 +361,7 @@ class ShellMixin:
         self._active_page = name
         for label, buttons in self._nav_buttons.items():
             for button in buttons:
-                button.configure(bootstyle="primary" if label == name else "link")
+                button.configure(style="Norma.CurrentNav.TButton" if label == name else "Norma.Nav.TButton")
 
     def _refresh_current_page(self) -> None:
         self.store.invalidate_cache()

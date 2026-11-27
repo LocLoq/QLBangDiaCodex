@@ -27,15 +27,15 @@ class ThemePalette:
 def theme_palette(dark_mode: bool) -> ThemePalette:
     if dark_mode:
         return ThemePalette(
-            background="#2B3E50", surface="#32465A", heading="#354D63",
-            foreground="#F8FAFC", muted="#C4CED8", accent="#79B8F3",
-            border="#526170", selection="#3F7FBA",
-            tooltip_background="#1F2D3A", tooltip_foreground="#F8FAFC",
+            background="#111D2B", surface="#1C2D3E", heading="#253A50",
+            foreground="#F8FAFC", muted="#BFCDDA", accent="#A0D8F2",
+            border="#526C83", selection="#315A76",
+            tooltip_background="#253A50", tooltip_foreground="#F8FAFC",
         )
     return ThemePalette(
-        background="#F0F1F1", surface="#FFFFFF", heading="#F3F4F5",
-        foreground="#182537", muted="#59616E", accent="#0069BF",
-        border="#D3D5D7", selection="#D9EBFA",
+        background="#EEF2F5", surface="#FFFFFF", heading="#E2EBF2",
+        foreground="#182537", muted="#4D6072", accent="#28577C",
+        border="#B5C7D6", selection="#CBE2F0",
         tooltip_background="#182537", tooltip_foreground="#FFFFFF",
     )
 
@@ -84,10 +84,17 @@ class AppearanceMixin:
     def _apply_ui_style(self) -> None:
         palette = theme_palette(self.dark_mode.get())
         self._palette = palette
+        self.configure(background=palette.background)
         base = self._font()[1]
         for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkCaptionFont", "TkFixedFont"):
             tkfont.nametofont(name).configure(family="Segoe UI", size=base)
         tkfont.nametofont("TkHeadingFont").configure(family="Segoe UI", size=base, weight="bold")
+        if not hasattr(self, "_role_fonts"):
+            self._role_fonts = {role: tkfont.Font(root=self, name=f"Norma{role.title()}")
+                                for role in ("section", "title")}
+        for role, named in self._role_fonts.items():
+            family, size, weight = self._font(role)
+            named.configure(family=family, size=size, weight=weight)
         rowheight = {"Nhỏ": 28, "Vừa": 31, "Lớn": 34}.get(self.font_scale.get(), 31)
         self.style.configure("Treeview", background=palette.surface, fieldbackground=palette.surface,
                              foreground=palette.foreground, bordercolor=palette.border,
@@ -120,9 +127,33 @@ class AppearanceMixin:
         self.style.configure("Norma.Card.TFrame", background=palette.surface)
         self.style.configure("Norma.Card.TLabel", background=palette.surface, foreground=palette.foreground)
         self.style.configure("Norma.CardMuted.TLabel", background=palette.surface, foreground=palette.muted)
+        self.style.configure("Norma.CardValue.TLabel", background=palette.surface, foreground=palette.foreground, font="NormaTitle")
+        self.style.configure("Norma.Total.TLabel", background=palette.heading, foreground=palette.foreground, font="NormaSection")
+        self.style.configure("Norma.Title.TLabel", background=palette.background, foreground=palette.foreground, font="NormaTitle")
+        self.style.configure("Norma.Section.TLabel", background=palette.background, foreground=palette.foreground, font="NormaSection")
+        self.style.configure("Norma.Poster.TLabel", background=palette.heading, foreground=palette.muted)
         self.style.configure("Norma.Tooltip.TLabel", background=palette.tooltip_background, foreground=palette.tooltip_foreground, bordercolor=palette.border, relief="solid")
         self.style.configure("TCombobox", padding=(6, 4))
         self.style.configure("TButton", padding=(8, 5))
+        for style in ("TEntry", "TCombobox", "TSpinbox"):
+            self.style.configure(style, fieldbackground=palette.surface, foreground=palette.foreground,
+                                 bordercolor=palette.border, insertcolor=palette.foreground)
+            self.style.map(style, bordercolor=[("focus", palette.accent)])
+        self.style.configure("primary.TButton", background=palette.accent, foreground=palette.background,
+                             bordercolor=palette.accent, padding=(10, 6))
+        self.style.map("primary.TButton", background=[("disabled", palette.heading), ("active", palette.selection)],
+                       foreground=[("disabled", palette.muted), ("active", palette.foreground)],
+                       bordercolor=[("focus", palette.foreground)])
+        self.style.configure("link.TButton", foreground=palette.foreground, background=palette.background)
+        self.style.map("link.TButton", foreground=[("active", palette.accent), ("focus", palette.accent)],
+                       background=[("active", palette.selection), ("focus", palette.heading)])
+        self.style.configure("Norma.Nav.TFrame", background=palette.surface)
+        for style, background in (("Norma.Nav.TButton", palette.surface),
+                                  ("Norma.CurrentNav.TButton", palette.selection)):
+            self.style.configure(style, background=background, foreground=palette.foreground,
+                                 bordercolor=background, focusthickness=1, focuscolor=palette.accent)
+            self.style.map(style, background=[("pressed", palette.selection), ("active", palette.heading)],
+                           bordercolor=[("focus", palette.accent)])
         refresh_navigation_icons = getattr(self, "_refresh_navigation_icons", None)
         if refresh_navigation_icons:
             refresh_navigation_icons()
@@ -148,6 +179,8 @@ class AppearanceMixin:
             axis.xaxis.label.set_color(palette.foreground)
             axis.yaxis.label.set_color(palette.foreground)
             axis.title.set_color(palette.foreground)
+            for text in axis.texts:
+                text.set_color(palette.foreground)
             legend = axis.get_legend()
             if legend is not None:
                 legend.get_frame().set_facecolor(palette.surface)

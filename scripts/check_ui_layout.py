@@ -11,7 +11,8 @@ import sys
 import os
 import time
 import tkinter as tk
-from tkinter import ttk
+from itertools import product
+from tkinter import messagebox, ttk
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -37,7 +38,22 @@ PAGES = (
     ("Thống kê", "statistics_page"),
     ("Lịch sử và hoạt động", "audit_page"),
     ("Cài đặt & Giới thiệu", "settings_page"),
+    ("Nhân viên", "employees_page"),
 )
+
+SCREENSHOTS = {"dashboard_page", "checkout_page", "inventory_page", "statistics_page"}
+
+
+def _capture(window: tk.Misc, name: str) -> None:
+    folder = os.environ.get("NORMASTORE_UI_SCREENSHOTS")
+    if not folder:
+        return
+    from PIL import ImageGrab
+
+    output = Path(folder)
+    output.mkdir(parents=True, exist_ok=True)
+    hwnd = int(window.wm_frame(), 0)
+    ImageGrab.grab(window=hwnd).save(output / f"{name}.png")
 
 
 def _visible_overflow(root: tk.Misc, container: tk.Misc) -> list[str]:
@@ -127,18 +143,71 @@ def _check_advanced_filters(root: tk.Misc, container: tk.Misc) -> list[str]:
     return problems
 
 
+def _check_primary_controls(container: tk.Misc, page_name: str) -> list[str]:
+    required = {"Tạo phiếu": {"+ Thuê", "+ Mua", "Xóa dòng", "Xóa tất cả", "Hoàn tất"},
+                "Kho đĩa": {"Thêm đĩa", "Sửa đã chọn", "Nhập CSV", "Tải mẫu CSV"}}
+    missing = required.get(page_name, set()).copy()
+    if not missing:
+        return []
+    problems = []
+
+    def visit(parent: tk.Misc) -> None:
+        for child in parent.winfo_children():
+            if isinstance(child, ttk.Button) and (text := child.cget("text")) in missing:
+                missing.remove(text)
+                if not child.winfo_viewable() or child.winfo_width() < child.winfo_reqwidth() - 2:
+                    problems.append(f"Nút bị cắt: {text}")
+            if isinstance(child, ttk.Treeview) and "note" in child["columns"]:
+                if not child.winfo_viewable() or child.winfo_height() < 65:
+                    problems.append("Giỏ phiếu không đủ chỗ hiển thị.")
+            visit(child)
+
+    visit(container)
+    return problems + [f"Thiếu nút: {text}" for text in sorted(missing)]
+
+
+def _check_login(app: NormaStoreApp) -> None:
+    app.update()
+    dialog = next(widget for widget in app.winfo_children() if isinstance(widget, tk.Toplevel))
+    if not dialog.winfo_viewable() or dialog.grab_current() != dialog:
+        raise RuntimeError("Hộp đăng nhập không hiển thị hoặc không nhận thao tác.")
+    clipped = _visible_overflow(app, dialog)
+    if clipped:
+        raise RuntimeError("Hộp đăng nhập bị cắt: " + " | ".join(clipped))
+    _capture(dialog, "login")
+    user, password = [widget for frame in dialog.winfo_children()
+                      for widget in frame.winfo_children() if isinstance(widget, ttk.Entry)]
+    user.focus_force()
+    user.event_generate("<Tab>")
+    app.update()
+    if dialog.focus_get() != password:
+        raise RuntimeError("Tab không chuyển tới ô mật khẩu.")
+    original_password = password.get()
+    password.delete(0, tk.END)
+    password.insert(0, "invalid-smoke-test-password")
+    errors = []
+    showerror = messagebox.showerror
+    try:
+        messagebox.showerror = lambda _title, message, **_kwargs: errors.append(message)
+        password.event_generate("<Return>")
+        app.update()
+    finally:
+        messagebox.showerror = showerror
+    if not errors or app.account is not None or not dialog.winfo_viewable():
+        raise RuntimeError("Mật khẩu sai không được xử lý trong hộp đăng nhập.")
+    password.delete(0, tk.END)
+    password.insert(0, original_password)
+    password.event_generate("<Return>")
+    app.update()
+    if app.account is None or dialog.winfo_exists() or not app.content.winfo_viewable():
+        raise RuntimeError("Đăng nhập đúng chưa mở được cửa sổ chính.")
+
+
 def main() -> int:
     settings = Settings()
     factory = bootstrap(settings)
     service, poster_cache = build_application(factory, settings)
 
-    def automatic_login(self) -> None:
-        self.account = self.store.authenticate('admin', 'admin123')
-        if not self.account:
-            raise RuntimeError("Không đăng nhập được tài khoản admin để smoke-test UI.")
-        self._build_shell()
-
-    NormaStoreApp._login = automatic_login
     app = NormaStoreApp(service, settings, poster_cache)
     failures: list[str] = []
     try:
@@ -146,6 +215,7 @@ def main() -> int:
         if scaling:
             app.tk.call("tk", "scaling", float(scaling))
             app._apply_ui_style()
+        _check_login(app)
         app.state("normal")
         size = os.environ.get("NORMASTORE_UI_SIZE", "1366x768")
         app.geometry(f"{size}+0+0")
@@ -180,19 +250,29 @@ def main() -> int:
         app.update_idletasks()
         if app._hidden_visible or str(app._help_menu.entrycget("Giới thiệu", "state")) != "disabled":
             failures.append("không ẩn lại các mục sau năm lần nhấn Home")
-        for font_scale in ("Vừa", "Lớn"):
+        for dark_mode, font_scale in product((False, True), ("Nhỏ", "Vừa", "Lớn")):
+            if app.dark_mode.get() != dark_mode:
+                app.dark_mode.set(dark_mode)
+                app._set_appearance()
             app.font_scale.set(font_scale)
             app._set_font_scale()
             for page_name, method_name in PAGES:
+                mode = "dark" if dark_mode else "light"
+                label = f"{mode}/{font_scale}/{page_name}"
                 try:
+                    settle = 0.15 if page_name in app.pages else 0.8
                     app.show_page(page_name, getattr(app, method_name))
-                    deadline = time.monotonic() + 0.8
+                    deadline = time.monotonic() + settle
                     while time.monotonic() < deadline:
                         app.update()
                         time.sleep(0.02)
+                    if font_scale == "Vừa" and method_name in SCREENSHOTS:
+                        _capture(app, f"{method_name}-{mode}")
+                    if controls := _check_primary_controls(app.pages[page_name], page_name):
+                        failures.append(f"{label}: " + " | ".join(controls))
                     overflow = _visible_overflow(app, app.content)
                     if overflow:
-                        failures.append(f"{font_scale}/{page_name}: " + " | ".join(overflow[:8]))
+                        failures.append(f"{label}: " + " | ".join(overflow[:8]))
                     if page_name == "Tạo phiếu":
                         panes = [widget for widget in app.pages[page_name].winfo_children()
                                  if isinstance(widget, ttk.Panedwindow)]
@@ -201,21 +281,18 @@ def main() -> int:
                                 frame = pane.nametowidget(child)
                                 clipped = _visible_overflow(app, frame)
                                 if clipped:
-                                    failures.append(f"{font_scale}/{page_name}/khung: " + " | ".join(clipped[:8]))
+                                    failures.append(f"{label}/khung: " + " | ".join(clipped[:8]))
                     alignment = _treeview_alignment(app.content)
                     if alignment:
-                        failures.append(f"{font_scale}/{page_name}: " + " | ".join(alignment[:8]))
+                        failures.append(f"{label}: " + " | ".join(alignment[:8]))
                     scrolling = _check_scrolling(app, app.content)
                     if scrolling:
-                        failures.append(f"{font_scale}/{page_name}: " + " | ".join(scrolling[:8]))
+                        failures.append(f"{label}: " + " | ".join(scrolling[:8]))
                     advanced = _check_advanced_filters(app, app.content)
                     if advanced:
-                        failures.append(f"{font_scale}/{page_name}/lọc nâng cao: " + " | ".join(advanced[:8]))
+                        failures.append(f"{label}/lọc nâng cao: " + " | ".join(advanced[:8]))
                 except Exception as exc:  # smoke runner must continue through all pages
-                    failures.append(f"{font_scale}/{page_name}: {type(exc).__name__}: {exc}")
-        app.dark_mode.set(True)
-        app._set_appearance()
-        app.update()
+                    failures.append(f"{label}: {type(exc).__name__}: {exc}")
     finally:
         app._close()
 
@@ -224,7 +301,7 @@ def main() -> int:
         for failure in failures:
             print(f"- {failure}")
         return 1
-    print(f"UI_SMOKE_OK: {len(PAGES)} pages, medium/large font, dark mode, {size}")
+    print(f"UI_SMOKE_OK: login, {len(PAGES)} pages, all font sizes, dark mode, {size}")
     return 0
 
 

@@ -43,6 +43,7 @@ class ReturnsPageMixin:
         tree.heading("due", text="Hạn trả")
         tree.heading("status", text="Trạng thái")
         tree.heading("location", text="Dãy / Kệ / Ngăn")
+        tree.column("#0", anchor="w")
         tree.pack(fill=BOTH, expand=True)
         footer = ttk.Frame(page)
         footer.pack(fill=X, pady=7)

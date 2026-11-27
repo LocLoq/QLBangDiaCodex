@@ -107,10 +107,12 @@ class CommonWidgetsMixin:
 
     def _heading(self, parent, title: str, subtitle: str = ""):
         bar = ttk.Frame(parent)
-        bar.pack(fill=X, pady=(0, 10))
-        ttk.Label(bar, text=title, font=self._font("title"), bootstyle="primary").pack(side=LEFT)
+        bar.pack(fill=X, pady=(0, 8))
+        heading = ttk.Frame(bar)
+        heading.pack(side=LEFT, anchor="w")
+        ttk.Label(heading, text=title, style="Norma.Title.TLabel").pack(anchor="w")
         if subtitle:
-            ttk.Label(bar, text=subtitle, bootstyle="secondary").pack(side=LEFT, padx=12, pady=8)
+            ttk.Label(heading, text=subtitle, bootstyle="secondary").pack(anchor="w", pady=(2, 0))
         ttk.Separator(parent).pack(fill=X, pady=(0, 8))
         return bar
 

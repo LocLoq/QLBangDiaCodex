@@ -10,32 +10,34 @@ import ttkbootstrap as tb
 from normastore.application.contracts import PageRequest
 from normastore.domain.enums import LineAction
 
-from ttkbootstrap.constants import BOTH, END, LEFT, X
+from ttkbootstrap.constants import BOTH, END, LEFT, RIGHT, X, Y
 
 from normastore.ui.formatting import vnd
 
 
 class DashboardPageMixin:
     def dashboard_page(self, page) -> None:
-        self._heading(page, "Tổng quan", "Tình hình cửa hàng hôm nay")
+        heading = self._heading(page, "Tổng quan", "Tình hình cửa hàng hôm nay")
         cards = ttk.Frame(page)
         cards.pack(fill=X)
         fields = [
-            ("available", "Có sẵn", "success"),
-            ("rented", "Đang thuê", "primary"),
-            ("overdue", "Quá hạn", "danger"),
-            ("reservations", "Đặt trước", "warning"),
+            ("available", "Có sẵn"),
+            ("rented", "Đang thuê"),
+            ("overdue", "Quá hạn"),
+            ("reservations", "Đặt trước"),
         ]
         labels = {}
-        for key, title, style in fields:
-            card = ttk.Labelframe(cards, text=title, padding=15, bootstyle=style)
-            card.pack(side=LEFT, fill=X, expand=True, padx=4)
-            labels[key] = ttk.Label(card, text="—", font=("Segoe UI", 20, "bold"))
-            labels[key].pack()
-        revenue = ttk.Label(page, text="", font=("Segoe UI", 13, "bold"), bootstyle="primary")
-        revenue.pack(anchor="w", padx=5, pady=16)
-        quick = ttk.Labelframe(page, text="Thao tác nhanh", padding=12)
-        quick.pack(fill=X, padx=4)
+        for index, (key, title) in enumerate(fields):
+            cards.columnconfigure(index, weight=1, uniform="dashboard-counts")
+            card = ttk.Frame(cards, style="Norma.Card.TFrame", padding=(12, 7))
+            card.grid(row=0, column=index, sticky="ew", padx=(0, 2))
+            ttk.Label(card, text=title, style="Norma.CardMuted.TLabel").pack(anchor="w")
+            labels[key] = ttk.Label(card, text="—", style="Norma.CardValue.TLabel")
+            labels[key].pack(anchor="w")
+        revenue = ttk.Label(page, text="", style="Norma.Section.TLabel")
+        revenue.pack(anchor="w", pady=(7, 0))
+        quick = ttk.Frame(heading)
+        quick.pack(side=RIGHT, anchor="e")
         ttk.Button(
             quick,
             text="Tạo phiếu",
@@ -62,8 +64,19 @@ class DashboardPageMixin:
         import_menu.add_command(label="Nhập từ CSV", command=add_copies_csv)
         import_button.configure(menu=import_menu)
         import_button.pack(side=LEFT, padx=4)
-        tabs = ttk.Notebook(page)
-        tabs.pack(fill=BOTH, expand=True, padx=4, pady=(14, 0))
+        shelf = ttk.Frame(page)
+        shelf.pack(fill=BOTH, expand=True, pady=(10, 0))
+        tabs = ttk.Notebook(shelf)
+        tabs.pack(side=LEFT, fill=BOTH, expand=True)
+        preview = ttk.Frame(shelf, style="Norma.Card.TFrame", width=165, padding=(10, 12))
+        preview.pack(side=RIGHT, fill=Y, padx=(8, 0))
+        preview.pack_propagate(False)
+        poster = ttk.Label(preview, text="Chọn phim để xem", anchor="center", style="Norma.Poster.TLabel",
+                           wraplength=140, padding=(4, 12))
+        poster.pack(fill=X)
+        preview_title = ttk.Label(preview, style="Norma.Card.TLabel", wraplength=140, justify=LEFT)
+        preview_title.pack(fill=X, pady=(8, 0))
+        preview_timer = {}
         trees = {}
         page_numbers = {key: tk.IntVar(value=1) for key in ("stock", "upcoming")}
         pagers = {}
@@ -83,6 +96,7 @@ class DashboardPageMixin:
                 selectmode="extended",
             )
             tree.heading("#0", text="Phim / tập")
+            tree.column("#0", anchor="w")
             for column, label in columns:
                 tree.heading(column, text=label)
             tree.pack(fill=BOTH, expand=True)
@@ -90,6 +104,34 @@ class DashboardPageMixin:
             if key in page_numbers:
                 pagers[key] = self._create_pager(frame, page_numbers[key], lambda current=key: reload_tab(current))
         upcoming = trees["upcoming"]
+
+        def update_preview(_event=None):
+            active_tree = trees[keys[tabs.index(tabs.select())]]
+            selected = active_tree.selection()
+            focused = active_tree.focus()
+            target = focused if focused in selected else selected[-1] if selected else None
+            poster._poster_request = None
+            preview_title.configure(text=active_tree.item(target, "text") if target else "")
+            poster.configure(image="", text="Đang tải ảnh…" if target else "Chọn phim để xem")
+            version = object()
+            preview_timer["version"] = version
+            if target is None:
+                return
+
+            def fetch_path():
+                if target.startswith("show:"):
+                    show_id = int(target.split(":", 1)[1])
+                    return next((show.poster_path for show in self.store.list_shows() if show.show_id == show_id), None)
+                return self.store.catalog_item(int(target)).poster_path
+
+            def show_poster(path):
+                if preview_timer["version"] is not version or not poster.winfo_exists():
+                    return
+                poster.configure(text="Chưa có poster")
+                if path:
+                    self._load_poster_thumbnail(path, poster, size=(128, 182))
+
+            self._debounce(preview_timer, lambda: self._run_async(fetch_path, show_poster, lambda _: show_poster(None)))
 
         def open_stock(_event=None):
             selection = trees["stock"].selection()
@@ -242,6 +284,9 @@ class DashboardPageMixin:
                 load_tab()
 
         tabs.bind("<<NotebookTabChanged>>", load_tab)
+        tabs.bind("<<NotebookTabChanged>>", update_preview, add="+")
+        for tree in trees.values():
+            tree.bind("<<TreeviewSelect>>", update_preview, add="+")
 
         def edit_discovery():
             selected = trees["discovery"].selection()

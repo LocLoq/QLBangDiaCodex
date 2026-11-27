@@ -45,6 +45,7 @@ class OrdersPageMixin:
         tree.heading("created", text="Lập lúc")
         tree.heading("status", text="Trạng thái")
         tree.heading("total", text="Cần thu")
+        tree.column("total", anchor="e")
         tree.column("total", anchor="e", width=115)
         tree.pack(fill=BOTH, expand=True)
         page_number = tk.IntVar(value=1)

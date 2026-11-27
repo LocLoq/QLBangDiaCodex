@@ -78,6 +78,9 @@ def main():
                                        release_date=date.today() + timedelta(days=7))
     show_title = "Bộ phim thử giao diện"
     show = service.create_show(show_title, actor_id=actor)
+    poster_path = "/normastore-ui-smoke-poster.jpg"
+    Image.new("RGB", (160, 220), "#28577C").save(poster_cache.path_for(poster_path))
+    service.set_show_poster(show.id, poster_path, actor)
     service.create_show("ZZ Phim bộ ngoài kết quả thử", actor_id=actor)
     episodes = service.add_episodes_bulk(show.id, 1, 1, 3, actor_id=actor)
     for number, episode in enumerate(episodes, 1):
@@ -146,7 +149,7 @@ def main():
         tree.selection_set(copy_node)
         x, y, _width, height = tree.bbox(copy_node)
         original_popup = tk.Menu.tk_popup
-        tk.Menu.tk_popup = lambda menu, *_args: menu.invoke("Sửa bản đĩa")
+        tk.Menu.tk_popup = lambda menu, *_args: menu.invoke("Sửa bản đĩa đã chọn")
         try:
             tree.event_generate("<Button-3>", x=x + 4, y=y + height // 2)
         finally:
@@ -547,6 +550,14 @@ def main():
             tab = notebook.nametowidget(tab_id)
             chart = next(w for w in widgets(tab) if isinstance(w, ttk.Treeview))
             assert any("Bộ phim thử giao diện" in chart.item(i, "text") for i in chart.get_children()), tab_name
+        selected_show = next(row for row in chart.get_children() if chart.item(row, "text") == show_title)
+        chart.selection_set(selected_show)
+        pump(1)
+        poster = next(w for w in widgets(page) if isinstance(w, ttk.Label) and w.cget("style") == "Norma.Poster.TLabel")
+        assert poster.cget("image"), "Kệ phim chưa hiển thị poster của phim đã chọn."
+        chart.selection_remove(selected_show)
+        pump()
+        assert not poster.cget("image") and poster.cget("text") == "Chọn phim để xem"
         print("DASHBOARD_POPULAR_TABS_OK", flush=True)
 
         def select_tab(name):

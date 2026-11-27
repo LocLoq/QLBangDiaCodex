@@ -60,9 +60,11 @@ class InventoryPageMixin:
         location_bar.pack(fill=X, pady=(0, 6))
         for label, variable in zip(("Dãy", "Kệ", "Ngăn"), location_filters):
             ttk.Label(location_bar, text=label).pack(side=LEFT)
-            ttk.Entry(location_bar, textvariable=variable, width=16).pack(side=LEFT, padx=5)
+            ttk.Entry(location_bar, textvariable=variable, width=10).pack(side=LEFT, padx=5)
         ttk.Label(location_bar, text="Giữ Ctrl hoặc Shift để chọn nhiều bản đĩa.",
                   bootstyle="secondary").pack(side=LEFT, padx=8)
+        actions = ttk.Frame(page)
+        actions.pack(fill=X, pady=(0, 6))
         page_number = tk.IntVar(value=1)
         sort_state: dict[str, object] = {"field": "title", "descending": False}
         tree_frame = ttk.Frame(page)
@@ -73,7 +75,9 @@ class InventoryPageMixin:
             show="tree headings",
         )
         tree.heading("#0", text="Phim / bộ / mùa / đĩa")
-        tree.column("#0", width=260, minwidth=180)
+        tree.column("#0", width=260, minwidth=180, anchor="w")
+        tree.column("title", anchor="w")
+        tree.column("percent", anchor="e")
         titles = [
             ("barcode", "Mã vạch"),
             ("title", "Phim/tập"),
@@ -432,12 +436,12 @@ class InventoryPageMixin:
             load_items()
 
         ttk.Button(filters, text="Lọc", command=refresh, bootstyle="secondary").pack(side=LEFT)
-        ttk.Button(filters, text="Thêm đĩa", command=add_copy, state="normal" if self._can_manage() else "disabled").pack(side=LEFT, padx=4)
-        ttk.Button(filters, text="Sửa đã chọn", command=edit_selected_copies,
+        ttk.Button(actions, text="Thêm đĩa", command=add_copy, bootstyle="primary", state="normal" if self._can_manage() else "disabled").pack(side=LEFT)
+        ttk.Button(actions, text="Sửa đã chọn", command=edit_selected_copies,
                    state="normal" if self._can_manage() else "disabled").pack(side=LEFT, padx=4)
-        ttk.Button(filters, text="Nhập CSV", command=lambda: import_file(self, "copies", refresh),
+        ttk.Button(actions, text="Nhập CSV", command=lambda: import_file(self, "copies", refresh),
                    state="normal" if self._can_manage() else "disabled").pack(side=LEFT, padx=4)
-        ttk.Button(filters, text="Tải mẫu CSV", command=lambda: export_template(self, "copies")).pack(side=LEFT, padx=4)
+        ttk.Button(actions, text="Tải mẫu CSV", command=lambda: export_template(self, "copies")).pack(side=LEFT, padx=4)
         def copy_menu(event):
             item = tree.identify_row(event.y)
             if item in nodes:
