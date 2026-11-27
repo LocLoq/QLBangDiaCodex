@@ -73,6 +73,163 @@ def test_service_returns_customer_view_after_session_close_and_rolls_back_errors
     assert store.list_customers("0987123987")[0] == customer
 
 
+def test_membership_checkout_and_renewal_are_recorded_on_receipts(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    customer = store.add_customer("Khách mua hội viên", "0908172635")
+    quote = store.quote(customer.id, [], premium_days=30)
+    assert quote.total_due == Decimal("59000")
+    with pytest.raises(BusinessError, match="đủ phí hội viên"):
+        store.checkout(customer.id, actor, [], [PaymentInput(PaymentMethod.CASH, Decimal("58000"))], premium_days=30)
+    assert not store.premium_active(customer.id)
+    order = store.checkout(customer.id, actor, [], [PaymentInput(PaymentMethod.CASH, quote.total_due)],
+                           premium_days=30, expected_quote=quote)
+    receipt = store.order_receipt(order.id)
+    assert receipt.checkout_paid == quote.total_due
+    assert receipt.lines[0].action == LineAction.PREMIUM
+    renewal = store.quote(customer.id, [], premium_days=30)
+    assert renewal.premium_starts_on == quote.premium_ends_on + timedelta(days=1)
+    store.checkout(customer.id, actor, [], [PaymentInput(PaymentMethod.CASH, renewal.total_due)], premium_days=30)
+    new_end = date.today() + timedelta(days=5)
+    store.set_premium_end_date(customer.id, new_end, actor)
+    session.expire_all()
+    periods = session.scalars(select(PremiumMembership).where(PremiumMembership.customer_id == customer.id)
+                              .order_by(PremiumMembership.starts_on)).all()
+    assert periods[1].starts_on == new_end + timedelta(days=1)
+    store.cancel_premium(customer.id, actor)
+    session.expire_all()
+    assert all(period.cancelled_on == date.today() for period in periods)
+
+
+def test_csv_import_uses_one_transaction_and_connects_episodes(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    rows = [{"type": "EPISODE", "title": "Tập Một", "show_ref": "bo1", "season": "1", "episode": "1"},
+            {"type": "SHOW", "title": "Bộ CSV mẫu", "show_ref": "bo1"}]
+    assert store.import_catalog_csv(rows, actor) == 2
+    item = session.scalar(select(CatalogItem).where(CatalogItem.title == "Tập Một"))
+    assert item and item.show_id and item.episode_number == 1
+    assert store.import_copies_csv([{"item_id": str(item.id), "quantity": "2"}], actor) == 2
+    with pytest.raises(BusinessError, match="Dòng 3"):
+        store.import_copies_csv([{"item_id": str(item.id), "quantity": "1"},
+                                 {"item_id": str(item.id), "quantity": "0"}], actor)
+    session.expire_all()
+    assert len(session.scalars(select(PhysicalCopy).where(PhysicalCopy.item_id == item.id)).all()) == 2
+    with pytest.raises(BusinessError, match="Dòng 3"):
+        store.import_catalog_csv([
+            {"type": "SHOW", "title": "Bộ bị hoàn tác", "show_ref": "rollback"},
+            {"type": "EPISODE", "title": "Tập lỗi", "show_ref": "rollback", "season": "0", "episode": "1"},
+        ], actor)
+    assert all(show.title != "Bộ bị hoàn tác" for show in store.list_shows())
+
+
+def test_membership_checkout_separates_fee_from_refundable_deposit(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    customer = store.add_customer("Khách thuê và đăng ký", "0908172636")
+    item = CatalogItem(item_type=ItemType.MOVIE, title="Phim kèm hội viên",
+                       rental_price=Decimal("20000"), sale_price=Decimal("100000"))
+    session.add(item)
+    session.flush()
+    copy = PhysicalCopy(item_id=item.id, barcode="MEMBERSHIP-RENTAL-COPY")
+    session.add(copy)
+    session.flush()
+    lines = [CheckoutLine(copy.id, LineAction.RENT, date.today() + timedelta(days=3))]
+    quote = store.quote(customer.id, lines, premium_days=30)
+    assert quote.discount_sources["PREMIUM"] == Decimal("2000")
+    assert quote.deposit == Decimal("53000")
+    order = store.checkout(customer.id, actor, lines,
+                           [PaymentInput(PaymentMethod.CASH, quote.premium_fee)],
+                           premium_days=30, expected_quote=quote)
+    receipt = store.order_receipt(order.id)
+    assert receipt.balance_due == quote.total_due - quote.premium_fee
+    amounts = session.scalars(select(PaymentTransaction).where(PaymentTransaction.order_id == order.id)).all()
+    assert [(payment.category, payment.amount) for payment in amounts] == [("PREMIUM", quote.premium_fee)]
+    session.expire_all()
+    from normastore.infrastructure.database.repositories.orders import OrderQueries
+    from normastore.infrastructure.database.models import Order
+    _, deposits = OrderQueries(session).rental_order_amounts([session.get(Order, order.id)])
+    rental_line = session.scalar(select(OrderLine).where(OrderLine.order_id == order.id, OrderLine.action == LineAction.RENT))
+    assert deposits[rental_line.id] == 0
+
+
+def test_dashboard_popular_targets_identifies_movie(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    customer = store.add_customer("Khách phim hot", "0908172637")
+    item = CatalogItem(item_type=ItemType.MOVIE, title="Phim hot có mã")
+    session.add(item)
+    session.flush()
+    copy = PhysicalCopy(item_id=item.id, barcode="POPULAR-TARGET-COPY")
+    session.add(copy)
+    session.flush()
+    store.checkout(customer.id, actor, [CheckoutLine(copy.id, LineAction.BUY, None)],
+                   [PaymentInput(PaymentMethod.CASH, Decimal("200000"))])
+    assert any(row[1] == item.id for row in store.dashboard_popular_targets(LineAction.BUY))
+
+
+def test_premium_settings_change_new_quotes_without_changing_old_receipt(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    customer = store.add_customer("Khách gói tùy chỉnh", "0908172638")
+    store.save_premium_plan(42, Decimal("70000"), True, actor)
+    quote = store.quote(customer.id, [], premium_days=42)
+    order = store.checkout(customer.id, actor, [], [PaymentInput(PaymentMethod.CASH, quote.total_due)],
+                           premium_days=42, expected_quote=quote)
+    store.save_premium_plan(42, Decimal("80000"), True, actor)
+    store.save_premium_settings(Decimal("25"), Decimal("40"), actor)
+    assert store.quote(customer.id, [], premium_days=42).premium_fee == Decimal("80000")
+    assert store.order_receipt(order.id).lines[0].unit_price == Decimal("70000")
+    store.save_premium_plan(43, Decimal("81000"), True, actor, previous_days=42)
+    assert store.quote(customer.id, [], premium_days=43).premium_fee == Decimal("81000")
+    assert store.order_receipt(order.id).lines[0].title == "Hội viên Premium 42 ngày"
+    with pytest.raises(BusinessError, match="Kỳ hạn đã tồn tại"):
+        store.save_premium_plan(30, Decimal("81000"), True, actor, previous_days=43)
+    item = CatalogItem(item_type=ItemType.MOVIE, title="Phim ưu đãi tùy chỉnh",
+                       rental_price=Decimal("20000"), sale_price=Decimal("100000"))
+    session.add(item)
+    session.flush()
+    copy = PhysicalCopy(item_id=item.id, barcode="CUSTOM-BENEFIT-COPY")
+    session.add(copy)
+    session.flush()
+    rental_quote = store.quote(customer.id, [CheckoutLine(copy.id, LineAction.RENT, date.today() + timedelta(days=1))])
+    assert rental_quote.discount_sources["PREMIUM"] == Decimal("5000")
+    assert rental_quote.deposit == Decimal("45000")
+    with pytest.raises(BusinessError):
+        store.save_premium_settings(Decimal("101"), Decimal("0"), actor)
+
+
+def test_reservation_state_filter_is_applied_before_pagination(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    customer = store.add_customer("Khách lọc trạng thái", "0908172639")
+    for index in range(3):
+        item = store.save_catalog_item(actor, item_type=ItemType.MOVIE, title=f"Lọc trạng thái {index}")
+        store.reserve(customer.id, [item.id], actor)
+        if index == 0:
+            store.add_copies(item.id, 1, actor_id=actor)
+    waiting = store.query_reservations(PageRequest(1, 1), text="Khách lọc trạng thái", state=ReservationState.WAITING)
+    assert waiting.total_items == 2
+    assert len(waiting.items) == 1 and waiting.items[0].state == ReservationState.WAITING
+    held = store.query_reservations(PageRequest(1, 1), text="Khách lọc trạng thái", state=ReservationState.HELD)
+    assert held.total_items == 1 and held.items[0].state == ReservationState.HELD
+
+
+def test_bulk_inventory_edit_preserves_other_fields_and_rolls_back_on_error(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    item = store.save_catalog_item(actor, item_type=ItemType.MOVIE, title="Phim sửa nhiều đĩa")
+    first = store.add_copy(item.id, actor_id=actor, aisle="A")
+    second = store.add_copy(item.id, actor_id=actor, aisle="B")
+    assert store.update_inventory_copies([first.id, second.id], {"rack": "K1"}, actor) == 2
+    session.expire_all()
+    copies = [session.get(PhysicalCopy, first.id), session.get(PhysicalCopy, second.id)]
+    assert [copy.aisle for copy in copies] == ["A", "B"]
+    assert [copy.rack for copy in copies] == ["K1", "K1"]
+    copies[1].status = CopyStatus.RENTED
+    session.flush()
+    with pytest.raises(BusinessError, match="Không thể ép đổi trạng thái"):
+        store.update_inventory_copies([first.id, second.id],
+                                      {"status": CopyStatus.REPAIR, "note": "Kiểm tra", "rack": "K2"}, actor)
+    session.expire_all()
+    copies = [session.get(PhysicalCopy, first.id), session.get(PhysicalCopy, second.id)]
+    assert [copy.rack for copy in copies] == ["K1", "K1"]
+    assert [copy.status for copy in copies] == [CopyStatus.AVAILABLE, CopyStatus.RENTED]
+
+
 def test_customer_page_includes_premium_state_and_paginated_views(store, session):
     customers = [store.add_customer(f"Khách phân trang {index}", f"09876655{index:02d}") for index in range(3)]
     store.activate_premium(customers[1].id, 30)
@@ -178,6 +335,65 @@ def test_preorder_is_allocated_before_checkout_even_when_worker_has_not_run(stor
     assert store.checkout_copies(item.id, LineAction.RENT, customer_id=second.id) == []
     assert store.checkout_copies(item.id, LineAction.RENT, customer_id=first.id)[0].copy_id == copy.id
     assert store.quote(first.id, [line]).deposit > 0
+
+
+def test_preorder_selected_copy_keeps_fifo_and_rolls_back_on_conflict(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    earlier = store.add_customer("Khách trước chọn đĩa", "0987771101")
+    later = store.add_customer("Khách sau chọn đĩa", "0987771102")
+    item = store.save_catalog_item(actor, item_type="MOVIE", title="Chọn đĩa cụ thể",
+                                   release_date=date.today() + timedelta(days=1))
+    copies = store.add_copies(item.id, 2, actor_id=actor)
+    store.reserve(earlier.id, [item.id], actor)
+    store.save_catalog_item(actor, id=item.id, release_date=date.today())
+    with pytest.raises(BusinessError, match="không còn phù hợp"):
+        store.reserve(later.id, [item.id], actor, copy_ids={item.id: copies[0].copy_id})
+    session.expire_all()
+    assert session.query(Reservation).filter_by(customer_id=later.id, item_id=item.id).count() == 0
+    store.reserve(later.id, [item.id], actor, copy_ids={item.id: copies[1].copy_id})
+    session.expire_all()
+    first = session.query(Reservation).filter_by(customer_id=earlier.id, item_id=item.id).one()
+    second = session.query(Reservation).filter_by(customer_id=later.id, item_id=item.id).one()
+    assert first.allocated_copy_id == copies[0].copy_id
+    assert second.allocated_copy_id == copies[1].copy_id
+    assert second.state == ReservationState.HELD and second.hold_until is not None
+
+
+def test_rental_history_filters_by_customer_id_and_keeps_invoice_details(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    first = store.add_customer("Khách cùng tên", "0987771103")
+    second = store.add_customer("Khách cùng tên", "0987771104")
+    item = store.save_catalog_item(actor, item_type="MOVIE", title="Lịch sử phim thuê")
+    copy = store.add_copy(item.id, actor_id=actor)
+    order = store.checkout(first.id, actor, [CheckoutLine(copy.id, LineAction.RENT, date.today() + timedelta(days=3))],
+                           [PaymentInput(PaymentMethod.CASH, Decimal("500000"))])
+    history = store.customer_rental_history(first.id, PageRequest(1, 1))
+    assert history.total_items == 1 and history.items[0].order_id == order.id
+    assert history.items[0].title == "Lịch sử phim thuê"
+    assert store.customer_rental_history(second.id).total_items == 0
+
+
+def test_reservation_search_field_and_fulfilled_action(store, session):
+    actor = store.authenticate("admin", "admin123").employee_id
+    customer = store.add_customer("Người tìm đặt trước", "0987771199")
+    items = [store.save_catalog_item(actor, item_type="MOVIE", title=f"Phim lọc {i}") for i in range(2)]
+    for item, action in zip(items, (LineAction.RENT, LineAction.BUY)):
+        store.reserve(customer.id, [item.id], actor)
+        copy = store.add_copy(item.id, actor_id=actor)
+        line = CheckoutLine(copy.id, action, date.today() + timedelta(days=3) if action == LineAction.RENT else None)
+        store.checkout(customer.id, actor, [line], [PaymentInput(PaymentMethod.CASH, Decimal("500000"))])
+    for action in (LineAction.RENT, LineAction.BUY):
+        result = store.query_reservations(text="0987771199", search_field="phone", fulfilled_action=action)
+        assert result.total_items == 1 and result.items[0].fulfilled_action == action
+    assert store.query_reservations(text="0987771199", search_field="name").total_items == 0
+    assert store.query_reservations(text="Phim lọc", search_field="movie").total_items == 2
+    legacy = Reservation(customer_id=customer.id, item_id=items[0].id,
+                         state=ReservationState.FULFILLED, fulfilled_line_id=None)
+    session.add(legacy)
+    session.flush()
+    all_rows = store.query_reservations(text="0987771199", search_field="phone")
+    assert any(row.reservation_id == legacy.id and row.fulfilled_action is None for row in all_rows.items)
+    assert store.query_reservations(text="0987771199", search_field="phone", fulfilled_action=LineAction.RENT).total_items == 1
 
 
 @pytest.mark.parametrize("sale_only", [False, True])

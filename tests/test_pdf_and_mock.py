@@ -19,6 +19,31 @@ from normastore.infrastructure.pdf_receipts import PdfReceiptExporter
 
 
 @pytest.mark.parametrize("layout", ["A4", "80mm"])
+def test_membership_fee_and_period_render_in_pdf(session, tmp_path, monkeypatch, layout):
+    import normastore.infrastructure.pdf_receipts as pdf
+
+    service = _StoreOperations(session)
+    actor = session.scalar(select(Employee.id).limit(1))
+    customer = service.add_customer("Khách PDF hội viên", "0908222111")
+    order = service.checkout(customer.id, actor, [],
+                             [PaymentInput(PaymentMethod.CASH, Decimal("59000"))], premium_days=30)
+    receipt = service.order_receipt(order.id)
+    paragraphs = []
+    original = pdf.Paragraph
+
+    def capture(text, *args, **kwargs):
+        paragraphs.append(text)
+        return original(text, *args, **kwargs)
+
+    monkeypatch.setattr(pdf, "Paragraph", capture)
+    destination = tmp_path / f"premium-{layout}.pdf"
+    PdfReceiptExporter().export(receipt, destination, layout)
+    assert destination.read_bytes().startswith(b"%PDF-")
+    assert any("Hội viên" in text for text in paragraphs)
+    assert any(date.today().strftime("%d/%m/%Y") in text for text in paragraphs)
+
+
+@pytest.mark.parametrize("layout", ["A4", "80mm"])
 def test_preorder_note_is_rendered_in_pdf(session, tmp_path, monkeypatch, layout):
     import normastore.infrastructure.pdf_receipts as pdf
 

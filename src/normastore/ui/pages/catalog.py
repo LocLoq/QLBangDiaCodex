@@ -16,6 +16,7 @@ from normastore.domain.enums import (
 )
 from normastore.ui.formatting import catalog_tooltip_text, vnd
 from normastore.ui.tooltips import Tooltip, TreeviewTooltip
+from normastore.ui.csv_import import export_template, import_file
 from normastore.ui.pages.inventory import CONDITION_LABELS, STATUS_LABELS
 
 CATALOG_PRICE_MODES = {"Giá gốc": "DIRECT", "Theo tình trạng đĩa": "CONDITION", "Theo % giá gốc": "PERCENT"}
@@ -185,6 +186,9 @@ class CatalogPageMixin:
         add_menu.add_command(label="Đĩa", command=lambda: add_copy())
         add_button.configure(menu=add_menu)
         add_button.pack(side=LEFT, padx=3)
+        ttk.Button(actions, text="Nhập CSV", command=lambda: import_file(self, "catalog", refresh),
+                   state=management_state).pack(side=LEFT, padx=3)
+        ttk.Button(actions, text="Tải mẫu CSV", command=lambda: export_template(self, "catalog")).pack(side=LEFT, padx=3)
         ttk.Button(actions, text="Xem bộ phim", command=lambda: show_details()).pack(
             side=LEFT, padx=3
         )
@@ -395,6 +399,7 @@ class CatalogPageMixin:
                             menu_button = ttk.Menubutton(card, text="Thao tác")
                             menu = tk.Menu(menu_button, tearoff=False)
                             menu.add_command(label="Sửa", command=lambda item_id=item.item_id: select_and_run(item_id, edit))
+                            menu.add_command(label="Sao chép mã phim / tập", command=lambda item_id=item.item_id: (self.clipboard_clear(), self.clipboard_append(str(item_id))))
                             menu.add_command(label="Thêm đĩa", command=lambda item_id=item.item_id: select_and_run(item_id, add_copy))
                             if item.show_id:
                                 menu.add_command(label="Thêm tập", command=lambda show_id=item.show_id: bulk_episodes(show_id))
@@ -629,6 +634,13 @@ class CatalogPageMixin:
             show_tree.configure(yscrollcommand=show_scroll.set)
             show_scroll.pack(side=RIGHT, fill=Y)
             show_tree.pack(fill=BOTH, expand=True)
+            def copy_selected_id(widget):
+                selection = widget.selection()
+                if selection:
+                    self.clipboard_clear()
+                    self.clipboard_append(selection[0])
+
+            ttk.Button(show_frame, text="Sao chép mã bộ", command=lambda: copy_selected_id(show_tree)).pack(anchor="w", pady=4)
             by_id = {str(show.show_id): show for show in shows}
             for show in shows:
                 show_tree.insert(
@@ -687,6 +699,7 @@ class CatalogPageMixin:
                 episodes.column(column, width=75, minwidth=55)
             ttk.Button(episode_actions, text="Thuê tập", command=lambda: send_to_checkout(LineAction.RENT), bootstyle="primary").pack(side=LEFT, padx=(0, 5))
             ttk.Button(episode_actions, text="Mua tập", command=lambda: send_to_checkout(LineAction.BUY), bootstyle="success").pack(side=LEFT)
+            ttk.Button(episode_actions, text="Sao chép mã tập", command=lambda: copy_selected_id(episodes)).pack(side=LEFT, padx=4)
             episode_vertical = ttk.Scrollbar(episode_holder, orient="vertical", command=episodes.yview)
             episode_horizontal = ttk.Scrollbar(episode_holder, orient="horizontal", command=episodes.xview)
             episodes.configure(yscrollcommand=episode_vertical.set, xscrollcommand=episode_horizontal.set)
@@ -890,6 +903,7 @@ class CatalogPageMixin:
                 tree.focus(item_id)
                 menu = tk.Menu(tree, tearoff=False)
                 menu.add_command(label="Sửa", command=edit)
+                menu.add_command(label="Sao chép mã phim / tập", command=lambda: (self.clipboard_clear(), self.clipboard_append(item_id)))
                 menu.add_command(label="Thêm đĩa", command=add_copy)
                 if rows[item_id].show_id:
                     menu.add_command(label="Thêm tập", command=lambda: bulk_episodes(rows[item_id].show_id))

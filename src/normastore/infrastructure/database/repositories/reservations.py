@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import desc, or_, select
+from sqlalchemy import desc, func, or_, select
 
 from normastore.application.contracts import (
     PagedResult,
@@ -10,7 +10,7 @@ from normastore.application.contracts import (
     ReservationView,
     SortSpec,
 )
-from normastore.domain.enums import CopyStatus, ReservationState
+from normastore.domain.enums import CopyStatus, LineAction, ReservationState
 from normastore.infrastructure.database.models import (
     CatalogItem,
     Customer,
@@ -28,23 +28,35 @@ class ReservationQueries:
 
     def query_reservations(
         self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created", True),
-        *, text: str = "",
+        *, text: str = "", state: ReservationState | tuple[ReservationState, ...] | None = None,
+        search_field: str = "all", fulfilled_action: LineAction | None = None,
     ) -> PagedResult[ReservationView]:
         stmt = (
-            select(Reservation, Customer, CatalogItem, OrderLine.action)
+            select(Reservation, Customer, CatalogItem, OrderLine.action, PhysicalCopy.barcode,
+                   func.coalesce(CatalogItem.poster_path, Show.poster_path))
             .join(Customer, Reservation.customer_id == Customer.id)
             .join(CatalogItem, Reservation.item_id == CatalogItem.id)
             .outerjoin(OrderLine, Reservation.fulfilled_line_id == OrderLine.id)
+            .outerjoin(PhysicalCopy, PhysicalCopy.id == Reservation.allocated_copy_id)
+            .outerjoin(Show, Show.id == CatalogItem.show_id)
         )
+        if isinstance(state, tuple):
+            stmt = stmt.where(Reservation.state.in_(state))
+        elif state is not None:
+            stmt = stmt.where(Reservation.state == state)
+        if fulfilled_action is not None:
+            stmt = stmt.where(Reservation.state == ReservationState.FULFILLED,
+                              OrderLine.action == fulfilled_action)
         if term := text.strip():
             show_matches = select(Show.id).where(
                 Show.id == CatalogItem.show_id, Show.title.contains(term, autoescape=True),
-            ).exists()
-            stmt = stmt.where(or_(
-                Customer.full_name.contains(term, autoescape=True),
-                CatalogItem.title.contains(term, autoescape=True),
-                show_matches,
-            ))
+            ).correlate(CatalogItem).exists()
+            matches = {
+                "name": Customer.full_name.contains(term, autoescape=True),
+                "phone": Customer.phone.contains(term, autoescape=True),
+                "movie": or_(CatalogItem.title.contains(term, autoescape=True), show_matches),
+            }
+            stmt = stmt.where(matches[search_field] if search_field in matches else or_(matches["name"], matches["movie"]))
         fields = {
             "customer": Customer.full_name,
             "item": CatalogItem.title,
@@ -71,8 +83,10 @@ class ReservationQueries:
                     item.id,
                     item.show_id,
                     fulfilled_action,
+                    barcode,
+                    poster_path,
                 )
-                for reservation, customer, item, fulfilled_action in page.items
+                for reservation, customer, item, fulfilled_action, barcode, poster_path in page.items
             ),
             page.page,
             page.page_size,
@@ -217,5 +231,5 @@ class ReservationQueries:
     def flush(self):
         self.session.flush()
 
-    def get_customer(self, identifier):
-        return self.session.get(Customer, identifier)
+    def get_customer(self, identifier, *, lock=False):
+        return self.session.get(Customer, identifier, with_for_update=lock)

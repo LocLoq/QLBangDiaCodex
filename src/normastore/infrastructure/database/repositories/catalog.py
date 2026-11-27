@@ -430,3 +430,12 @@ class CatalogQueries:
 
     def get_show(self, identifier):
         return self.session.get(Show, identifier)
+
+    def show_by_title(self, title):
+        return self.session.scalar(select(Show).where(Show.title == title, Show.archived.is_(False)))
+
+    def movie_by_title_date(self, title, release_date):
+        return self.session.scalar(select(CatalogItem).where(
+            CatalogItem.item_type == ItemType.MOVIE, CatalogItem.title == title,
+            CatalogItem.release_date == release_date, CatalogItem.archived.is_(False),
+        ))

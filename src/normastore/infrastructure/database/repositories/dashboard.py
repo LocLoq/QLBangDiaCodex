@@ -88,6 +88,20 @@ class DashboardQueries:
             .group_by(group_key, title).order_by(count.desc(), title).limit(limit)
         ).all()
 
+    def popular_targets(self, action, since, limit=20):
+        title = func.coalesce(Show.title, CatalogItem.title)
+        count = func.count(OrderLine.id)
+        return self.session.execute(
+            select(Show.id, case((Show.id.is_(None), CatalogItem.id), else_=None), title, count)
+            .select_from(OrderLine).join(Order, Order.id == OrderLine.order_id)
+            .join(PhysicalCopy, PhysicalCopy.id == OrderLine.copy_id)
+            .join(CatalogItem, CatalogItem.id == PhysicalCopy.item_id)
+            .outerjoin(Show, Show.id == CatalogItem.show_id)
+            .where(OrderLine.action == action, Order.created_at >= since)
+            .group_by(Show.id, case((Show.id.is_(None), CatalogItem.id), else_=None), title)
+            .order_by(count.desc(), title).limit(limit)
+        ).all()
+
     def _upcoming_statement(self, today):
         return (select(CatalogItem.id, CatalogItem.title, CatalogItem.release_date)
             .where(CatalogItem.archived.is_(False), CatalogItem.release_date > today,

@@ -98,6 +98,71 @@ class SettingsPageMixin:
         test_button.pack(side=LEFT)
 
         if self._can_manage():
+            premium_box = ttk.Labelframe(page, text="Hội viên Premium", padding=12)
+            premium_box.pack(fill=X, pady=(14, 0))
+            settings = self.store.premium_settings()
+            merchandise = tk.StringVar(value=str(settings.merchandise_percent))
+            deposit_discount = tk.StringVar(value=str(settings.deposit_percent))
+            ttk.Label(premium_box, text="Giảm tiền hàng (%)").grid(row=0, column=0, sticky="w")
+            ttk.Entry(premium_box, textvariable=merchandise, width=9).grid(row=0, column=1, padx=5)
+            ttk.Label(premium_box, text="Giảm tiền cọc (%)").grid(row=0, column=2, padx=(10, 0))
+            ttk.Entry(premium_box, textvariable=deposit_discount, width=9).grid(row=0, column=3, padx=5)
+
+            def save_benefits():
+                try:
+                    self.store.save_premium_settings(Decimal(merchandise.get().replace(",", ".")),
+                                                     Decimal(deposit_discount.get().replace(",", ".")),
+                                                     self.account.employee_id)
+                    messagebox.showinfo("Hội viên", "Đã lưu ưu đãi.", parent=self)
+                except Exception as exc:
+                    messagebox.showerror("Hội viên", str(exc), parent=self)
+
+            ttk.Button(premium_box, text="Lưu ưu đãi", command=save_benefits).grid(row=0, column=4, padx=6)
+            plans = self._create_treeview(premium_box, columns=("price", "active"), show="tree headings", height=3)
+            plans.heading("#0", text="Kỳ hạn (ngày)")
+            plans.heading("price", text="Giá (đồng)")
+            plans.heading("active", text="Đang bán")
+            plans.grid(row=1, column=0, columnspan=5, sticky="ew", pady=6)
+
+            def refresh_plans():
+                plans.delete(*plans.get_children())
+                for plan in self.store.premium_plans(True):
+                    plans.insert("", "end", iid=str(plan.days), text=str(plan.days),
+                                 values=(str(plan.price), "Có" if plan.active else "Không"))
+
+            def edit_plan():
+                selected = plans.selection()
+                current = next((plan for plan in self.store.premium_plans(True)
+                                if selected and plan.days == int(selected[0])), None)
+                days = simpledialog.askinteger("Gói hội viên", "Kỳ hạn (ngày)", initialvalue=current.days if current else 30, parent=self)
+                if days is None:
+                    return
+                price = simpledialog.askstring("Gói hội viên", "Giá (đồng)", initialvalue=str(current.price) if current else "59000", parent=self)
+                if price is None:
+                    return
+                try:
+                    if (not current or current.days != days) and any(plan.days == days for plan in self.store.premium_plans(True)):
+                        raise ValueError("Kỳ hạn đã tồn tại. Hãy chọn gói để sửa.")
+                    self.store.save_premium_plan(days, Decimal(price), current.active if current else True,
+                                                 self.account.employee_id, current.days if current else None)
+                    refresh_plans()
+                except Exception as exc:
+                    messagebox.showerror("Gói hội viên", str(exc), parent=self)
+
+            def toggle_plan():
+                selected = plans.selection()
+                if not selected:
+                    return
+                plan = next(plan for plan in self.store.premium_plans(True) if plan.days == int(selected[0]))
+                try:
+                    self.store.save_premium_plan(plan.days, plan.price, not plan.active, self.account.employee_id)
+                    refresh_plans()
+                except Exception as exc:
+                    messagebox.showerror("Gói hội viên", str(exc), parent=self)
+
+            ttk.Button(premium_box, text="Thêm / sửa gói", command=edit_plan).grid(row=2, column=0, sticky="w")
+            ttk.Button(premium_box, text="Bật / ngừng bán", command=toggle_plan).grid(row=2, column=1, columnspan=2, sticky="w")
+            refresh_plans()
             deposit_box = ttk.Labelframe(page, text="Tỷ lệ tiền cọc", padding=12)
             deposit_box.pack(fill=X, pady=(14, 0))
             deposit_percent = tk.StringVar(value=str(self.store.deposit_percent()))

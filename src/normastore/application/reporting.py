@@ -31,6 +31,15 @@ class StockoutItem:
 
 
 @dataclass(frozen=True)
+class TopCustomer:
+    customer_id: int
+    customer_name: str
+    phone: str
+    order_count: int
+    total: Decimal
+
+
+@dataclass(frozen=True)
 class ChartReport:
     revenue: tuple[tuple[date, LineAction, Decimal], ...]
     damages: tuple[tuple[str, int], ...]
@@ -72,6 +81,8 @@ class OperationalReport:
     out_of_stock: tuple[StockoutItem, ...]
     waiting_reservations: tuple[tuple[str, int], ...]
     overdue_customers: tuple[OverdueCustomer, ...]
+    held: int = 0
+    top_customers: tuple[TopCustomer, ...] = ()
 
 
 def operational_report(
@@ -120,6 +131,8 @@ def operational_report(
     status_counts = Counter(dict(repository.status_counts()))
     top_rentals = tuple((str(title), int(count)) for title, count in repository.top_titles(LineAction.RENT))
     top_sales = tuple((str(title), int(count)) for title, count in repository.top_titles(LineAction.BUY))
+    top_customers = tuple(TopCustomer(customer_id, name, phone, int(count), Decimal(total))
+                          for customer_id, name, phone, count, total in repository.top_customers())
     combo_counts: Counter[int] = Counter()
     for source_code in repository.combo_codes():
         for raw_id in (source_code or "").split(","):
@@ -186,6 +199,7 @@ def operational_report(
         deposits_held=Decimal(deposits_held),
         available=int(status_counts[CopyStatus.AVAILABLE]),
         rented=int(status_counts[CopyStatus.RENTED]),
+        held=int(status_counts[CopyStatus.HELD]),
         inspection=int(status_counts[CopyStatus.INSPECTION]),
         repair=int(status_counts[CopyStatus.REPAIR]),
         lost=int(status_counts[CopyStatus.LOST]),
@@ -193,6 +207,7 @@ def operational_report(
         overdue_count=overdue_count,
         top_rentals=top_rentals,
         top_sales=top_sales,
+        top_customers=top_customers,
         top_combos=top_combos,
         top_vouchers=top_vouchers,
         discounts_by_source=discounts_by_source,

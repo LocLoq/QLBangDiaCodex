@@ -11,6 +11,8 @@ from normastore.infrastructure.database.models import (
     Customer,
     PaymentTransaction,
     PremiumMembership,
+    PremiumPlan,
+    PremiumSettings,
     RecommendationCache,
 )
 from normastore.infrastructure.database.repositories.pagination import page_rows
@@ -22,6 +24,33 @@ class CustomerQueries:
 
     def customer(self, customer_id: int, *, lock: bool = False):
         return self.session.get(Customer, customer_id, with_for_update=lock)
+
+    def premium_settings(self):
+        return self.session.get(PremiumSettings, 1)
+
+    def premium_plans(self, include_inactive=False):
+        statement = select(PremiumPlan).order_by(PremiumPlan.days)
+        if not include_inactive:
+            statement = statement.where(PremiumPlan.active.is_(True))
+        return list(self.session.scalars(statement))
+
+    def premium_plan(self, days):
+        return self.session.get(PremiumPlan, days)
+
+    def save_premium_plan(self, plan):
+        self.session.add(plan)
+        self.session.flush()
+
+    def scheduled_memberships(self, customer_id, today):
+        return list(self.session.scalars(select(PremiumMembership).where(
+            PremiumMembership.customer_id == customer_id,
+            PremiumMembership.starts_on > today,
+            PremiumMembership.cancelled_on.is_(None),
+        ).order_by(PremiumMembership.starts_on, PremiumMembership.id).with_for_update()))
+
+    def add_membership(self, membership):
+        self.session.add(membership)
+        self.session.flush()
 
     def customer_by_phone(self, phone: str):
         return self.session.scalar(select(Customer).where(Customer.phone == phone))

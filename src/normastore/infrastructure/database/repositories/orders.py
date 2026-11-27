@@ -8,6 +8,7 @@ from sqlalchemy.orm import joinedload
 
 from normastore.application.contracts import (
     ActiveRental,
+    RentalHistoryEntry,
     OrderSummary,
     PagedResult,
     PageRequest,
@@ -38,6 +39,22 @@ from normastore.infrastructure.database.repositories.pagination import page_rows
 class OrderQueries:
     def __init__(self, session):
         self.session = session
+
+    def customer_rental_history(self, customer_id, page_request):
+        statement = (select(Order, OrderLine, PhysicalCopy, RentalTerm)
+                     .join(OrderLine, OrderLine.order_id == Order.id)
+                     .outerjoin(PhysicalCopy, OrderLine.copy_id == PhysicalCopy.id)
+                     .outerjoin(RentalTerm, RentalTerm.line_id == OrderLine.id)
+                     .where(Order.customer_id == customer_id, OrderLine.action == LineAction.RENT)
+                     .order_by(Order.created_at.desc(), Order.id.desc(), OrderLine.id))
+        page = page_rows(self.session, statement, page_request)
+        entries = tuple(RentalHistoryEntry(
+            order.id, order.code, order.created_at, line.title_snapshot,
+            line.barcode_snapshot or (copy.barcode if copy else None),
+            term.due_date if term else None, term.returned_on if term else None,
+            term.state if term else None,
+        ) for order, line, copy, term in page.items)
+        return PagedResult(entries, page.page, page.page_size, page.total_items, page.total_pages)
 
     def query_active_rentals(
         self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("due", False), customer_name: str = ""
@@ -105,11 +122,16 @@ class OrderQueries:
                    PaymentTransaction.category == "CHECKOUT")
             .group_by(PaymentTransaction.order_id)
         ).all())
+        premium_by_order = dict(self.session.execute(
+            select(OrderLine.order_id, func.sum(OrderLine.unit_price))
+            .where(OrderLine.order_id.in_(orders_by_id), OrderLine.action == LineAction.PREMIUM)
+            .group_by(OrderLine.order_id)
+        ).all())
         zero = Decimal("0")
         balances = {}
         paid_deposits = {}
         for order in orders_by_id.values():
-            total_due = order.gross_total - order.discount_total + order.deposit_total
+            total_due = order.gross_total - order.discount_total + order.deposit_total - premium_by_order.get(order.id, zero)
             # Confirmed legacy and demo orders may have no checkout transaction.
             fallback = total_due if order.status == "CONFIRMED" else zero
             paid = max(zero, paid_by_order.get(order.id, fallback))

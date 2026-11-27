@@ -148,6 +148,13 @@ class AppearanceMixin:
             axis.xaxis.label.set_color(palette.foreground)
             axis.yaxis.label.set_color(palette.foreground)
             axis.title.set_color(palette.foreground)
+            legend = axis.get_legend()
+            if legend is not None:
+                legend.get_frame().set_facecolor(palette.surface)
+                legend.get_frame().set_edgecolor(palette.border)
+                legend.get_frame().set_alpha(1)
+                for text in legend.get_texts():
+                    text.set_color(palette.foreground)
             for spine in axis.spines.values():
                 spine.set_color(palette.border)
             axis.grid(axis="y", color=palette.border, alpha=0.55)

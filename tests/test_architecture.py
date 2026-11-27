@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parents[1] / "src" / "normastore"
 def test_every_table_has_a_separate_model_module():
     configure_mappers()
     mappings = list(Base.registry.mappers)
-    assert len(mappings) == len(Base.metadata.tables) == 34
-    assert len({mapper.class_.__module__ for mapper in mappings}) == 34
+    assert len(mappings) == len(Base.metadata.tables) == 36
+    assert len({mapper.class_.__module__ for mapper in mappings}) == 36
 
 
 def test_initial_migration_uses_frozen_schema():

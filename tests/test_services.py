@@ -511,6 +511,35 @@ def test_operational_report_filters_transaction_metrics_by_period(session):
     session.rollback()
 
 
+def test_top_customers_uses_order_lines_and_period_without_deposits(session):
+    from normastore.infrastructure.database.models import Order
+
+    service = _StoreOperations(session)
+    actor = manager_id(session)
+    first = service.add_customer("Khách trùng tên", "0987701231")
+    second = service.add_customer("Khách trùng tên", "0987701232")
+    timestamp = datetime(2021, 3, 15, 12, tzinfo=timezone.utc)
+    first_order = Order(code="TOP-CUSTOMER-001", customer_id=first.id, employee_id=actor,
+                        gross_total=Decimal("150000"), discount_total=Decimal("10000"),
+                        deposit_total=Decimal("500000"), created_at=timestamp)
+    second_order = Order(code="TOP-CUSTOMER-002", customer_id=second.id, employee_id=actor,
+                         gross_total=Decimal("120000"), discount_total=Decimal("0"),
+                         deposit_total=Decimal("0"), created_at=timestamp)
+    session.add_all([first_order, second_order])
+    session.flush()
+    session.add_all([
+        OrderLine(order_id=first_order.id, action=LineAction.RENT, title_snapshot="Thuê", unit_price=Decimal("100000"), discount_amount=Decimal("10000")),
+        OrderLine(order_id=first_order.id, action=LineAction.PREMIUM, title_snapshot="Hội viên", unit_price=Decimal("50000"), discount_amount=Decimal("0")),
+        OrderLine(order_id=second_order.id, action=LineAction.BUY, title_snapshot="Mua", unit_price=Decimal("120000"), discount_amount=Decimal("0")),
+    ])
+    session.flush()
+    report = service.operational_report(start_on=date(2021, 3, 15), end_on=date(2021, 3, 15))
+    assert [(row.customer_id, row.order_count, row.total) for row in report.top_customers] == [
+        (first.id, 1, Decimal("140000")), (second.id, 1, Decimal("120000")),
+    ]
+    assert not service.operational_report(start_on=date(2021, 3, 16), end_on=date(2021, 3, 16)).top_customers
+
+
 def test_operational_report_counts_active_and_expired_premium_memberships(session):
     service = _StoreOperations(session)
     before = service.operational_report()
@@ -961,6 +990,8 @@ def test_staff_cannot_mutate_catalog_or_inventory(session):
         service.save_catalog_item(staff.id, id=item.id, title="Tên sửa trái quyền")
     with pytest.raises(BusinessError, match="Quản lý"):
         service.add_copy(item.id, "DVD-STAFF-DENIED-001", actor_id=staff.id)
+    with pytest.raises(BusinessError, match="Quản lý"):
+        service.update_inventory_copies([1], {"rack": "A"}, staff.id)
     with pytest.raises(BusinessError, match="Quản lý"):
         service.create_show("Bộ phim trái quyền", actor_id=staff.id)
     session.rollback()

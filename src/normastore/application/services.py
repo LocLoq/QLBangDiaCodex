@@ -57,6 +57,7 @@ from normastore.domain.enums import (
     CopyStatus,
     LineAction,
     PaymentMethod,
+    ReservationState,
     ReturnOutcome,
     RoleCode,
 )
@@ -156,9 +157,11 @@ class StoreService:
     _MUTATIONS = frozenset({
         "change_password", "create_employee_account", "add_customer", "update_customer", "activate_premium",
         "set_premium_end_date", "cancel_premium", "delete_customer",
+        "save_premium_settings", "save_premium_plan",
         "create_voucher", "create_fixed_combo", "create_show_episode_combo", "save_catalog_item",
         "create_show", "set_show_poster", "add_episodes_bulk", "add_copy", "add_copies", "save_deposit_percent",
-        "update_inventory_copy",
+        "import_catalog_csv", "import_copies_csv",
+        "update_inventory_copy", "update_inventory_copies",
         "archive_items", "bulk_update_catalog_prices", "checkout", "return_rentals",
         "extend_rental", "rental_to_sale", "return_sale", "inspect_copy", "reserve", "cancel_reservation",
         "cancel_reservations",
@@ -357,6 +360,18 @@ class StoreService:
     def premium_until(self, customer_id: int, on_date: date | None = None) -> date | None:
         return self._execute("premium_until", customer_id, on_date)
 
+    def premium_settings(self):
+        return self._execute("premium_settings")
+
+    def premium_plans(self, include_inactive=False):
+        return self._execute("premium_plans", include_inactive)
+
+    def save_premium_settings(self, merchandise_percent, deposit_percent, actor_id):
+        return self._execute("save_premium_settings", merchandise_percent, deposit_percent, actor_id)
+
+    def save_premium_plan(self, days, price, active, actor_id, previous_days=None):
+        return self._execute("save_premium_plan", days, price, active, actor_id, previous_days)
+
     def set_premium_end_date(self, customer_id: int, ends_on: date, actor_id: int) -> None:
         self._execute("set_premium_end_date", customer_id, ends_on, actor_id)
 
@@ -452,6 +467,12 @@ class StoreService:
     def save_catalog_item(self, actor_id: int, **data) -> CatalogItemView:
         return self._execute("save_catalog_item", actor_id, **data)
 
+    def import_catalog_csv(self, rows, actor_id):
+        return self._execute("import_catalog_csv", rows, actor_id)
+
+    def import_copies_csv(self, rows, actor_id):
+        return self._execute("import_copies_csv", rows, actor_id)
+
     def list_shows(self) -> list[ShowSummary]:
         return self._execute("list_shows")
 
@@ -538,6 +559,9 @@ class StoreService:
     ) -> RecordView:
         return self._execute("update_inventory_copy", copy_id, request, actor_id)
 
+    def update_inventory_copies(self, copy_ids: list[int], changes: dict, actor_id: int) -> int:
+        return self._execute("update_inventory_copies", copy_ids, changes, actor_id)
+
     def archive_items(self, item_ids: list[int], actor_id: int) -> int:
         return self._execute("archive_items", item_ids, actor_id)
 
@@ -562,10 +586,11 @@ class StoreService:
         lines: list[CheckoutLine],
         voucher_code: str | None = None,
         combo_ids: list[int] | None = None,
+        premium_days: int | None = None,
     ) -> Quote:
         if lines:
             self._execute("allocate_for_checkout", tuple(line.copy_id for line in lines))
-        return self._execute("quote", customer_id, lines, voucher_code, combo_ids)
+        return self._execute("quote", customer_id, lines, voucher_code, combo_ids, premium_days)
 
     def checkout(
         self,
@@ -578,6 +603,7 @@ class StoreService:
         *,
         order_code: str | None = None,
         expected_quote: Quote | None = None,
+        premium_days: int | None = None,
     ) -> OrderView:
         if lines:
             self._execute("allocate_for_checkout", tuple(line.copy_id for line in lines))
@@ -591,6 +617,7 @@ class StoreService:
             combo_ids,
             order_code=order_code,
             expected_quote=expected_quote,
+            premium_days=premium_days,
         )
 
     def query_active_rentals(
@@ -616,6 +643,9 @@ class StoreService:
 
     def order_detail(self, order_id: int) -> tuple[OrderSummary, list[OrderDetailLine]]:
         return self._execute("order_detail", order_id)
+
+    def customer_rental_history(self, customer_id: int, page_request: PageRequest = PageRequest()):
+        return self._execute("customer_rental_history", customer_id, page_request)
 
     def order_receipt(self, order_id: int) -> OrderReceipt:
         return self._execute("order_receipt", order_id)
@@ -693,15 +723,17 @@ class StoreService:
         return self._execute("inspect_copy", copy_id, employee_id, target_status, note)
 
     def reserve(
-        self, customer_id: int, item_ids: list[int], actor_id: int | None = None
+        self, customer_id: int, item_ids: list[int], actor_id: int | None = None,
+        *, copy_ids: dict[int, int] | None = None,
     ) -> list[RecordView]:
-        return self._execute("reserve", customer_id, item_ids, actor_id)
+        return self._execute("reserve", customer_id, item_ids, actor_id, copy_ids=copy_ids)
 
     def query_reservations(
         self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created", True),
-        *, text: str = "",
+        *, text: str = "", state: ReservationState | tuple[ReservationState, ...] | None = None,
+        search_field: str = "all", fulfilled_action: LineAction | None = None,
     ) -> PagedResult[ReservationView]:
-        return self._execute("query_reservations", page_request, sort, text=text)
+        return self._execute("query_reservations", page_request, sort, text=text, state=state, search_field=search_field, fulfilled_action=fulfilled_action)
 
     def list_reservations(self) -> list[ReservationView]:
         return self._execute("list_reservations")
@@ -732,6 +764,9 @@ class StoreService:
 
     def dashboard_popular(self, action: LineAction):
         return self._execute("dashboard_popular", action)
+
+    def dashboard_popular_targets(self, action: LineAction):
+        return self._execute("dashboard_popular_targets", action)
 
     def dashboard_upcoming(self):
         return self._execute("dashboard_upcoming")

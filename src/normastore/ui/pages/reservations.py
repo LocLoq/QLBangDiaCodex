@@ -7,7 +7,7 @@ from ttkbootstrap.constants import BOTH, END, LEFT, X
 from ttkbootstrap.widgets.scrolled import ScrolledFrame
 
 from normastore.application.contracts import CatalogFilters, PageRequest, SortSpec
-from normastore.domain.enums import ItemType, LineAction, ReservationState
+from normastore.domain.enums import CopyStatus, ItemType, LineAction, ReservationState
 from normastore.ui.formatting import RESERVATION_LABELS, format_datetime, vnd
 
 
@@ -17,10 +17,26 @@ class ReservationsPageMixin:
         search_row = ttk.Frame(page)
         search_row.pack(fill=X, pady=(0, 6))
         search = tk.StringVar()
-        ttk.Label(search_row, text="Tìm tên khách hoặc phim:").pack(side=LEFT)
+        search_field = tk.StringVar(value="name")
+        for label, value in (("Tên khách", "name"), ("SĐT", "phone"), ("Phim", "movie")):
+            ttk.Radiobutton(search_row, text=label, variable=search_field, value=value).pack(side=LEFT, padx=2)
         ttk.Entry(search_row, textvariable=search, width=34).pack(side=LEFT, padx=6)
+        states = {"Đang chờ hoặc đang giữ": (ReservationState.WAITING, ReservationState.HELD),
+                  "Tất cả": None, "Đang chờ": ReservationState.WAITING,
+                  "Đang giữ": ReservationState.HELD, "Đã thuê": ReservationState.FULFILLED,
+                  "Đã mua": ReservationState.FULFILLED,
+                  "Hết hạn": ReservationState.EXPIRED, "Đã hủy": ReservationState.CANCELLED}
+        state_filter = tk.StringVar(value="Đang chờ hoặc đang giữ")
+        ttk.Label(search_row, text="Trạng thái").pack(side=LEFT, padx=(10, 3))
+        ttk.Combobox(search_row, textvariable=state_filter, values=tuple(states),
+                     state="readonly", width=23).pack(side=LEFT)
+        list_mode = tk.StringVar(value="Danh sách")
+        ttk.Combobox(search_row, textvariable=list_mode, values=("Danh sách", "Thẻ"),
+                     state="readonly", width=10).pack(side=LEFT, padx=5)
+        list_area = ttk.Frame(page)
+        list_area.pack(fill=BOTH, expand=True)
         tree = self._create_treeview(
-            page, columns=("customer", "item", "state", "hold"), show="headings", selectmode="extended"
+            list_area, columns=("customer", "item", "state", "hold"), show="headings", selectmode="extended"
         )
         for column, title in [
             ("customer", "Khách"),
@@ -30,14 +46,19 @@ class ReservationsPageMixin:
         ]:
             tree.heading(column, text=title)
         tree.pack(fill=BOTH, expand=True)
+        cards = ScrolledFrame(list_area, autohide=False)
         bottom = ttk.Frame(page)
         bottom.pack(fill=X, pady=6)
         page_number = tk.IntVar(value=1)
         sort_state: dict[str, object] = {"field": "created", "descending": True}
         reservations = {}
+        card_selection: set[int] = set()
         cancellable_states = (ReservationState.WAITING, ReservationState.HELD)
 
         def selected_reservations():
+            if list_mode.get() == "Thẻ":
+                return [reservation for reservation in reservations.values()
+                        if reservation.reservation_id in card_selection]
             return [reservations[row] for row in tree.selection() if row in reservations]
 
         def can_cancel(selected):
@@ -138,9 +159,68 @@ class ReservationsPageMixin:
             picker.pack(fill=BOTH, expand=True)
             card_area = ScrolledFrame(picker_area, autohide=False)
             selected_item_ids: set[int] = set()
+            selected_copies: dict[int, int] = {}
+            selected_copy_labels: dict[int, str] = {}
+            selected_copy_text = tk.StringVar(value="Chưa chọn đĩa cụ thể.")
+            ttk.Label(frame, textvariable=selected_copy_text, wraplength=950).pack(anchor="w")
             picker_rows = {}
             item_page = tk.IntVar(value=1)
             item_sort: dict[str, object] = {"field": "#0", "descending": False}
+
+            def choose_copy():
+                selected = list(picker.selection()) if view_mode.get() == "Danh sách" else [str(i) for i in selected_item_ids]
+                if len(selected) != 1:
+                    return messagebox.showinfo("Chọn đĩa", "Hãy chọn đúng một phim hoặc tập.", parent=dialog)
+                item_id = int(selected[0])
+                item = self.store.catalog_item(item_id)
+                from datetime import date
+                if item.release_date and item.release_date > date.today():
+                    return messagebox.showinfo("Chọn đĩa", "Phim chưa phát hành. Hãy đặt trước theo phim.", parent=dialog)
+                previous_grab = self.grab_current()
+                copy_dialog = self._dialog("Chọn bản đĩa đặt trước", 720, 450)
+                if previous_grab:
+                    def restore_grab(event):
+                        if event.widget is copy_dialog and previous_grab.winfo_exists():
+                            previous_grab.grab_set()
+                    copy_dialog.bind("<Destroy>", restore_grab, add="+")
+                copy_tree = self._create_treeview(copy_dialog, columns=("format", "condition", "location"), show="tree headings")
+                for column, title in (("#0", "Mã đĩa"), ("format", "Định dạng"), ("condition", "Tình trạng"), ("location", "Vị trí")):
+                    copy_tree.heading(column, text=title)
+                copy_tree.pack(fill=BOTH, expand=True, padx=10, pady=10)
+                copy_page = tk.IntVar(value=1)
+
+                def load_copies():
+                    copy_tree.delete(*copy_tree.get_children())
+                    result = self.store.query_inventory(CopyStatus.AVAILABLE, PageRequest(copy_page.get(), 50), SortSpec("barcode"), item_id=item_id)
+                    pager(result)
+                    for copy in result.items:
+                        if (item.can_rent and copy.can_rent) or (item.can_sell and copy.can_sell):
+                            copy_tree.insert("", END, iid=str(copy.copy_id), text=copy.barcode,
+                                             values=(copy.media_format, copy.condition.value, " / ".join(x or "—" for x in (copy.aisle, copy.rack, copy.compartment))))
+
+                def confirm_copy():
+                    selection = copy_tree.selection()
+                    if not selection:
+                        return messagebox.showinfo("Chọn đĩa", "Hãy chọn một bản đĩa.", parent=copy_dialog)
+                    selected_item_ids.add(item_id)
+                    selected_copies[item_id] = int(selection[0])
+                    selected_copy_labels[item_id] = f"{item.title}: {copy_tree.item(selection[0], 'text')}"
+                    selected_copy_text.set("Đã chọn đĩa: " + "; ".join(selected_copy_labels.values()))
+                    copy_dialog.destroy()
+
+                def clear_copy():
+                    selected_copies.pop(item_id, None)
+                    selected_copy_labels.pop(item_id, None)
+                    selected_copy_text.set("Đã chọn đĩa: " + "; ".join(selected_copy_labels.values())
+                                           if selected_copy_labels else "Chưa chọn đĩa cụ thể.")
+                    copy_dialog.destroy()
+
+                pager = self._create_pager(copy_dialog, copy_page, load_copies)
+                ttk.Button(copy_dialog, text="Chọn đĩa", command=confirm_copy).pack(side=LEFT, padx=10, pady=8)
+                ttk.Button(copy_dialog, text="Đặt theo phim", command=clear_copy).pack(side=LEFT, padx=5)
+                load_copies()
+
+            ttk.Button(frame, text="Chọn bản đĩa cho phim đã chọn", command=choose_copy).pack(anchor="w", pady=4)
 
             def load_customers():
                 if not dialog.winfo_exists():
@@ -230,7 +310,8 @@ class ReservationsPageMixin:
                         "Đặt trước", "Hãy chọn khách hàng và ít nhất một phim/tập.", parent=dialog
                     )
                 try:
-                    self.store.reserve(customer.id, ids, self.account.employee_id)
+                    self.store.reserve(customer.id, ids, self.account.employee_id,
+                                       copy_ids={item_id: selected_copies[item_id] for item_id in ids if item_id in selected_copies})
                     dialog.destroy()
                     refresh()
                 except Exception as exc:
@@ -275,25 +356,56 @@ class ReservationsPageMixin:
             self.store.expire_reservation_holds()
             tree.delete(*tree.get_children())
             reservations.clear()
+            card_selection.clear()
+            for child in cards.winfo_children():
+                child.destroy()
             result = self.store.query_reservations(
                 PageRequest(page_number.get(), 50),
                 SortSpec(str(sort_state["field"]), bool(sort_state["descending"])),
-                text=search.get(),
+                text=search.get(), state=states[state_filter.get()], search_field=search_field.get(),
+                fulfilled_action={"Đã thuê": LineAction.RENT, "Đã mua": LineAction.BUY}.get(state_filter.get()),
             )
             pager(result)
-            for reservation in result.items:
+            for index, reservation in enumerate(result.items):
+                label = {LineAction.RENT: "Đã thuê", LineAction.BUY: "Đã mua"}.get(
+                    reservation.fulfilled_action, RESERVATION_LABELS[reservation.state])
                 row_id = tree.insert(
                     "",
                     END,
                     values=(
                         reservation.customer_name,
                         reservation.item_title,
-                        ({LineAction.RENT: "Đã thuê", LineAction.BUY: "Đã mua"}.get(
-                            reservation.fulfilled_action, RESERVATION_LABELS[reservation.state])),
+                        label,
                         format_datetime(reservation.hold_until),
                     ),
                 )
                 reservations[row_id] = reservation
+                if list_mode.get() == "Thẻ":
+                    card = ttk.Labelframe(cards, text=reservation.item_title, padding=8)
+                    card.grid(row=index // 3, column=index % 3, sticky="nsew", padx=4, pady=4)
+                    poster = ttk.Label(card, text="Đang tải poster", width=10, anchor="center")
+                    poster.pack(side=LEFT, padx=(0, 8))
+                    self._load_poster_thumbnail(reservation.poster_path, poster)
+                    content = ttk.Frame(card)
+                    content.pack(side=LEFT, fill=BOTH, expand=True)
+                    ttk.Label(content, text=f"Khách: {reservation.customer_name}\n{label}\nĐĩa: {reservation.barcode or '—'}\nGiữ đến: {format_datetime(reservation.hold_until)}", justify=LEFT, wraplength=220).pack(anchor="w")
+                    chosen = tk.BooleanVar(value=False)
+                    def toggle(current=reservation.reservation_id, variable=chosen):
+                        if variable.get():
+                            card_selection.add(current)
+                        else:
+                            card_selection.discard(current)
+                        update_cancel_button()
+                    ttk.Checkbutton(content, text="Chọn", variable=chosen, command=toggle).pack(anchor="w")
+                    ttk.Button(content, text="Chi tiết phim", command=lambda item_id=reservation.item_id: self._open_catalog_details(item_id)).pack(anchor="w")
+            if list_mode.get() == "Thẻ":
+                tree.pack_forget()
+                cards.pack(fill=BOTH, expand=True)
+            else:
+                cards.pack_forget()
+                tree.pack(fill=BOTH, expand=True)
+            for column in range(3):
+                cards.columnconfigure(column, weight=1)
             update_cancel_button()
 
         ttk.Button(bottom, text="Tạo đặt trước", command=create, bootstyle="primary").pack(
@@ -313,6 +425,9 @@ class ReservationsPageMixin:
         pager = self._create_pager(page, page_number, refresh)
         search_timer: dict[str, str] = {}
         search.trace_add("write", lambda *_: self._debounce(search_timer, lambda: (page_number.set(1), refresh())))
+        state_filter.trace_add("write", lambda *_: (page_number.set(1), refresh()))
+        search_field.trace_add("write", lambda *_: (page_number.set(1), refresh()))
+        list_mode.trace_add("write", lambda *_: refresh())
         self._install_sortable_headings(
             tree,
             {"customer": "Khách", "item": "Phim / tập", "state": "Trạng thái", "hold": "Giữ đến"},

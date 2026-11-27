@@ -462,8 +462,14 @@ def main():
         app.show_page("Thống kê", app.statistics_page)
         pump(3)
         page = app.pages["Thống kê"]
-        analysis = app._figures[-1]
-        revenue_axis, damage_axis, genre_axis = analysis.axes
+        inventory_figure, analysis, revenue_figure, damage_figure, finance_figure = app._figures[-5:]
+        revenue_axis = revenue_figure.axes[0]
+        damage_axis = damage_figure.axes[0]
+        genre_axis = analysis.axes[0]
+        sections = next(w for w in widgets(page) if isinstance(w, ttk.Notebook)
+                        and [w.tab(tab, "text") for tab in w.tabs()] == ["Tổng quan", "Tài chính", "Kho"])
+        sections.select(1)
+        pump(0.5)
         assert len(revenue_axis.lines) == 2, "Biểu đồ doanh thu thiếu thuê hoặc bán."
         assert damage_axis.patches, "Biểu đồ hỏng hóc thiếu lượt trả thử."
         assert genre_axis.patches, "Biểu đồ thể loại thiếu lượt bán thử."
@@ -473,8 +479,8 @@ def main():
             day = line.get_xdata()[-1]
             low, high = revenue_axis.get_ylim()
             x, y = revenue_axis.transData.transform((line.get_xdata(orig=False)[-1], (low + high) / 2))
-            event = MouseEvent("motion_notify_event", analysis.canvas, x, y)
-            analysis.canvas.callbacks.process(event.name, event)
+            event = MouseEvent("motion_notify_event", revenue_figure.canvas, x, y)
+            revenue_figure.canvas.callbacks.process(event.name, event)
             return day, next(text for text in revenue_axis.texts if text.get_visible())
 
         hovered_date, tooltip = hover_revenue()
@@ -484,8 +490,8 @@ def main():
             f"{hovered_date:%d/%m/%Y}\nThuê: {vnd(expected.get(LineAction.RENT, 0), exact=True)}"
             f"\nBán: {vnd(expected.get(LineAction.BUY, 0), exact=True)}"
         )
-        outside = MouseEvent("motion_notify_event", analysis.canvas, 0, 0)
-        analysis.canvas.callbacks.process(outside.name, outside)
+        outside = MouseEvent("motion_notify_event", revenue_figure.canvas, 0, 0)
+        revenue_figure.canvas.callbacks.process(outside.name, outside)
         assert not tooltip.get_visible()
         action_picker = next(w for w in widgets(page) if isinstance(w, ttk.Combobox) and
                              "Tất cả giao dịch" in w.cget("values"))
@@ -598,13 +604,18 @@ def main():
         pump()
         reservations_page = app.pages["Đặt trước"]
         reservation_tree = next(w for w in widgets(reservations_page) if isinstance(w, ttk.Treeview))
-        fill_entry(reservations_page, "Tìm tên khách hoặc phim:", "Khách chờ hủy")
+        search_entry = next(w for w in widgets(reservations_page) if isinstance(w, ttk.Entry)
+                            and not isinstance(w, ttk.Combobox))
+        search_entry.insert(0, "Khách chờ hủy")
         pump()
         assert [reservation_tree.set(row, "customer") for row in reservation_tree.get_children()] == [waiting_customer.full_name]
-        fill_entry(reservations_page, "Tìm tên khách hoặc phim:", show_title)
+        search_entry.delete(0, tk.END)
+        search_entry.insert(0, show_title)
+        next(w for w in widgets(reservations_page) if isinstance(w, ttk.Radiobutton)
+             and w.cget("text") == "Phim").invoke()
         pump()
         assert len(reservation_tree.get_children()) == 2
-        fill_entry(reservations_page, "Tìm tên khách hoặc phim:", "")
+        search_entry.delete(0, tk.END)
         pump()
         assert len(reservation_tree.get_children()) > 2
         print("RESERVATION_SEARCH_OK", flush=True)
@@ -649,6 +660,10 @@ def main():
             reservation_tree.event_generate("<Button-3>", x=x + 4, y=y + height // 2)
         finally:
             tk.Menu.tk_popup = original_popup
+        status_filter = next(w for w in widgets(reservations_page) if isinstance(w, ttk.Combobox)
+                             and "Đã hủy" in w.cget("values"))
+        status_filter.set("Đã hủy")
+        pump()
         cancelled_rows = [i for i in reservation_tree.get_children()
                           if reservation_tree.set(i, "item") == reserved_episode.item_title]
         assert len(cancelled_rows) == 2

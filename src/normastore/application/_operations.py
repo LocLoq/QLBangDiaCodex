@@ -33,6 +33,8 @@ from normastore.application.contracts import (
     OrderReceiptLine,
     OrderSummary,
     PageRequest,
+    PremiumPlanView,
+    PremiumSettingsView,
     PagedResult,
     PaymentInput,
     Quote,
@@ -89,6 +91,7 @@ from normastore.infrastructure.database.models import (
     PenaltyCharge,
     PhysicalCopy,
     PremiumMembership,
+    PremiumPlan,
     RentalExtension,
     RentalTerm,
     Reservation,
@@ -297,6 +300,47 @@ class _StoreOperations:
     def premium_until(self, customer_id: int, on_date: date | None = None) -> date | None:
         return self.customers_queries.premium_until(customer_id, on_date or date.today())
 
+    def premium_settings(self):
+        settings = self.customers_queries.premium_settings()
+        return PremiumSettingsView(Decimal(settings.merchandise_percent), Decimal(settings.deposit_percent))
+
+    def premium_plans(self, include_inactive=False):
+        return [PremiumPlanView(plan.days, Decimal(plan.price), plan.active)
+                for plan in self.customers_queries.premium_plans(include_inactive)]
+
+    def save_premium_settings(self, merchandise_percent, deposit_percent, actor_id):
+        self._require_manager(actor_id)
+        values = [Decimal(merchandise_percent), Decimal(deposit_percent)]
+        if any(not value.is_finite() or not 0 <= value <= 100 for value in values):
+            raise BusinessError("Tỷ lệ ưu đãi phải từ 0 đến 100%.")
+        settings = self.customers_queries.premium_settings()
+        before = [str(settings.merchandise_percent), str(settings.deposit_percent)]
+        settings.merchandise_percent, settings.deposit_percent = values
+        self._audit(actor_id, "UPDATE_PREMIUM_SETTINGS", "PremiumSettings", 1,
+                    {"before": before, "after": [str(value) for value in values]})
+
+    def save_premium_plan(self, days, price, active, actor_id, previous_days=None):
+        self._require_manager(actor_id)
+        price = Decimal(price)
+        if type(days) is not int or days < 1 or days > 36500 or not price.is_finite() or price <= 0 or price != price.to_integral_value() or price >= Decimal("1000000000000"):
+            raise BusinessError("Kỳ hạn và giá gói phải là số nguyên dương hợp lệ.")
+        if previous_days is not None and previous_days != days:
+            plan = self.customers_queries.premium_plan(previous_days)
+            if plan is None:
+                raise BusinessError("Gói hội viên không còn tồn tại.")
+            if self.customers_queries.premium_plan(days) is not None:
+                raise BusinessError("Kỳ hạn đã tồn tại.")
+            plan.days = days
+        else:
+            plan = self.customers_queries.premium_plan(days)
+        if plan is None:
+            plan = PremiumPlan(days=days, price=price, active=active)
+            self.customers_queries.save_premium_plan(plan)
+        else:
+            plan.price, plan.active = price, active
+        self._audit(actor_id, "UPDATE_PREMIUM_PLAN", "PremiumPlan", days,
+                    {"price": str(price), "active": active, "previous_days": previous_days})
+
     def _active_memberships_for_edit(self, customer_id: int, actor_id: int, today: date):
         self._require_manager(actor_id)
         if self.customers_queries.customer(customer_id, lock=True) is None:
@@ -315,6 +359,12 @@ class _StoreOperations:
         current.ends_on = ends_on
         for membership in overlapping:
             membership.ends_on = min(membership.ends_on, ends_on)
+        next_start = ends_on + timedelta(days=1)
+        for membership in self.customers_queries.scheduled_memberships(customer_id, today):
+            duration = (membership.ends_on - membership.starts_on).days
+            membership.starts_on = next_start
+            membership.ends_on = next_start + timedelta(days=duration)
+            next_start = membership.ends_on + timedelta(days=1)
         self._audit(actor_id, "UPDATE_PREMIUM_END", "Customer", customer_id, {
             "before": before.isoformat(), "after": ends_on.isoformat(),
         })
@@ -322,6 +372,7 @@ class _StoreOperations:
     def cancel_premium(self, customer_id: int, actor_id: int) -> None:
         today = date.today()
         memberships = self._active_memberships_for_edit(customer_id, actor_id, today)
+        memberships += self.customers_queries.scheduled_memberships(customer_id, today)
         for membership in memberships:
             membership.cancelled_on = today
         self._audit(actor_id, "CANCEL_PREMIUM", "Customer", customer_id, {
@@ -336,14 +387,14 @@ class _StoreOperations:
         employee_id: int | None = None,
         method: PaymentMethod = PaymentMethod.CASH,
     ) -> PremiumMembership:
-        prices = {30: Decimal("59000"), 90: Decimal("159000"), 365: Decimal("499000")}
-        if days not in prices:
-            raise BusinessError("Premium chỉ có kỳ hạn 30, 90 hoặc 365 ngày.")
+        plan = self.customers_queries.premium_plan(days)
+        if not plan or not plan.active:
+            raise BusinessError("Gói Premium không còn được bán.")
         if not self.customers_queries.customer(customer_id, lock=True):
             raise BusinessError("Không tìm thấy khách hàng.")
         membership = PremiumMembership(
             customer_id=customer_id, starts_on=date.today(), ends_on=date.today() + timedelta(days=days - 1),
-            price_paid=prices[days],
+            price_paid=plan.price,
         )
         self.customers_queries.save_membership(
             membership, PaymentTransaction(
@@ -351,11 +402,11 @@ class _StoreOperations:
                 employee_id=employee_id,
                 method=method,
                 category="PREMIUM",
-                amount=prices[days],
+                amount=plan.price,
             )
         )
         self._audit(employee_id, "ACTIVATE_PREMIUM", "PremiumMembership", membership.id, {
-            "customer_id": customer_id, "days": days, "price": str(prices[days]),
+            "customer_id": customer_id, "days": days, "price": str(plan.price),
         })
         return membership
 
@@ -568,6 +619,14 @@ class _StoreOperations:
             self.catalog_queries.set_item_genres(item.id, genre_names)
         self.catalog_queries.add_audit_log(AuditLog(actor_id=actor_id, action='UPDATE_CATALOG' if item_id else 'CREATE_CATALOG', entity='CatalogItem', entity_id=str(item.id), detail=item.title))
         return item
+
+    def import_catalog_csv(self, rows, actor_id):
+        from normastore.application.csv_import import import_catalog
+        return import_catalog(self, rows, actor_id)
+
+    def import_copies_csv(self, rows, actor_id):
+        from normastore.application.csv_import import import_copies
+        return import_copies(self, rows, actor_id)
 
     def list_shows(self) -> list[ShowSummary]:
         return [
@@ -844,6 +903,40 @@ class _StoreOperations:
         })
         return copy
 
+    def update_inventory_copies(self, copy_ids: list[int], changes: dict, actor_id: int) -> int:
+        self._require_manager(actor_id)
+        editable = {
+            "media_format", "condition", "can_rent", "can_sell", "status",
+            "rental_price_override", "sale_price_override", "condition_percent",
+            "rental_price_mode", "sale_price_mode", "rental_price_percent", "sale_price_percent",
+            "aisle", "rack", "compartment", "note",
+        }
+        if not copy_ids or not changes or set(changes) - editable or set(changes) == {"note"}:
+            raise BusinessError("Hãy chọn đĩa và ít nhất một trường cần sửa.")
+        copies = []
+        for copy_id in sorted(set(copy_ids)):
+            copy = self.inventory_queries.lock_copy(copy_id)
+            if copy is None:
+                raise BusinessError(f"Không tìm thấy bản đĩa {copy_id}.")
+            copies.append(copy)
+        for copy in copies:
+            values = {
+                "barcode": copy.barcode, "media_format": copy.media_format,
+                "condition": copy.condition, "can_rent": copy.can_rent,
+                "can_sell": copy.can_sell, "status": copy.status,
+                "rental_price_override": copy.rental_price_override,
+                "sale_price_override": copy.sale_price_override,
+                "condition_percent": copy.condition_percent,
+                "rental_price_mode": copy.rental_price_mode,
+                "sale_price_mode": copy.sale_price_mode,
+                "rental_price_percent": copy.rental_price_percent,
+                "sale_price_percent": copy.sale_price_percent,
+                "aisle": copy.aisle, "rack": copy.rack, "compartment": copy.compartment,
+            }
+            values.update(changes)
+            self.update_inventory_copy(copy.id, UpdateInventoryCopyRequest(**values), actor_id)
+        return len(copies)
+
     def archive_items(self, item_ids: list[int], actor_id: int) -> int:
         self._require_manager(actor_id)
         items = list(self.inventory_queries.fetch_archive_items_items(item_ids))
@@ -875,8 +968,8 @@ class _StoreOperations:
         if role_code not in (RoleCode.ADMIN, RoleCode.MANAGER):
             raise BusinessError("Thao tác này cần quyền Quản lý hoặc Quản trị viên.")
 
-    def quote(self, customer_id: int, lines: list[CheckoutLine], voucher_code: str | None = None, combo_ids: list[int] | None = None) -> Quote:
-        if not lines:
+    def quote(self, customer_id: int, lines: list[CheckoutLine], voucher_code: str | None = None, combo_ids: list[int] | None = None, premium_days: int | None = None) -> Quote:
+        if not lines and premium_days is None:
             raise BusinessError("Phiếu chưa có bản đĩa nào.")
         if len(lines) != len({line.copy_id for line in lines}):
             raise BusinessError("Một bản đĩa không thể xuất hiện nhiều lần trong cùng phiếu.")
@@ -893,6 +986,20 @@ class _StoreOperations:
         line_prices: dict[int, Decimal] = {}
         line_deposits: dict[int, Decimal] = {}
         premium = self.premium_active(customer_id)
+        premium_fee = Decimal("0")
+        premium_start = premium_end = None
+        if premium_days is not None:
+            plan = self.customers_queries.premium_plan(premium_days)
+            if not plan or not plan.active:
+                raise BusinessError("Gói Premium không còn được bán.")
+            premium_fee = Decimal(plan.price)
+            current_end = self.premium_until(customer_id)
+            scheduled = self.customers_queries.scheduled_memberships(customer_id, date.today())
+            last_end = max([end for end in [current_end, *(row.ends_on for row in scheduled)] if end], default=None)
+            premium_start = max(date.today(), last_end + timedelta(days=1)) if last_end else date.today()
+            premium_end = premium_start + timedelta(days=premium_days - 1)
+            premium = True
+        settings = self.premium_settings()
         deposit_percent = self.deposit_percent()
         for line in lines:
             copy = by_id[line.copy_id]
@@ -906,7 +1013,7 @@ class _StoreOperations:
                     raise BusinessError("Dòng thuê cần hạn trả và bản đĩa cho phép thuê.")
                 price = self._copy_price(copy, LineAction.RENT)
                 sale_price = self._copy_price(copy, LineAction.BUY)
-                line_deposits[copy.id] = effective_deposit(Decimal(sale_price) * deposit_percent / Decimal("100"), premium)
+                line_deposits[copy.id] = effective_deposit(Decimal(sale_price) * deposit_percent / Decimal("100"), premium, settings.deposit_percent)
                 deposit += line_deposits[copy.id]
             elif line.action == LineAction.BUY:
                 if not copy.can_sell or not copy.item.can_sell:
@@ -942,7 +1049,7 @@ class _StoreOperations:
                 combo_discount += Decimal(combo.discount_amount)
                 applied_combo_ids.append(combo.id)
         combo_discount = min(combo_discount, discount_cap - discovery_discount)
-        premium_discount = (gross - discovery_discount - combo_discount) * Decimal("0.10") if premium else Decimal("0")
+        premium_discount = (gross - discovery_discount - combo_discount) * settings.merchandise_percent / Decimal("100") if premium else Decimal("0")
         premium_discount = min(premium_discount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), discount_cap - discovery_discount - combo_discount)
         voucher_discount = Decimal("0")
         if voucher_code:
@@ -975,7 +1082,7 @@ class _StoreOperations:
             line_discounts[line.copy_id] += share
             remaining_discount -= share
             remaining_value -= capacity
-        return Quote(gross, discount, deposit, gross - discount + deposit, line_prices, sources, source_codes, line_deposits, line_discounts)
+        return Quote(gross + premium_fee, discount, deposit, gross - discount + deposit + premium_fee, line_prices, sources, source_codes, line_deposits, line_discounts, premium_fee, premium_start, premium_end)
 
     def checkout(
         self,
@@ -988,9 +1095,12 @@ class _StoreOperations:
         *,
         order_code: str | None = None,
         expected_quote: Quote | None = None,
+        premium_days: int | None = None,
     ) -> Order:
         if any(Decimal(payment.amount) < 0 for payment in payments):
             raise BusinessError("Khoản thanh toán không được âm.")
+        if premium_days is not None and not self.customers_queries.customer(customer_id, lock=True):
+            raise BusinessError("Không tìm thấy khách hàng.")
         self.allocate_for_checkout([line.copy_id for line in lines])
         locked = list(self.orders_queries.fetch_checkout_locked(lines))
         by_id = {copy.id: copy for copy in locked}
@@ -1003,9 +1113,12 @@ class _StoreOperations:
                     continue
             if copy.status != CopyStatus.AVAILABLE:
                 raise BusinessError("Tồn kho đã thay đổi, hãy lập lại phiếu.")
-        quote = self.quote(customer_id, lines, voucher_code, combo_ids)
+        quote = self.quote(customer_id, lines, voucher_code, combo_ids, premium_days)
         if expected_quote is not None and quote != expected_quote:
             raise BusinessError("Giá hoặc ưu đãi đã thay đổi. Hãy kiểm tra báo giá mới trước khi thanh toán.")
+        paid = sum((Decimal(p.amount) for p in payments), Decimal("0"))
+        if paid < quote.premium_fee:
+            raise BusinessError("Cần thanh toán đủ phí hội viên để kích hoạt gói.")
         code = order_code or f"PX{datetime.now():%y%m%d%H%M%S}{token_hex(4).upper()}"
         if self.orders_queries.fetch_checkout_check(code):
             raise BusinessError("Mã phiếu đã tồn tại.")
@@ -1013,6 +1126,18 @@ class _StoreOperations:
                       gross_total=quote.gross, discount_total=quote.discount, deposit_total=quote.deposit)
         self.orders_queries.add_order(order)
         self.orders_queries.flush()
+        if premium_days is not None:
+            membership = PremiumMembership(customer_id=customer_id, starts_on=quote.premium_starts_on,
+                                           ends_on=quote.premium_ends_on, price_paid=quote.premium_fee)
+            self.customers_queries.add_membership(membership)
+            self.orders_queries.add_order_line(OrderLine(
+                order_id=order.id, action=LineAction.PREMIUM,
+                title_snapshot=f"Hội viên Premium {premium_days} ngày", unit_price=quote.premium_fee,
+                discount_amount=0, deposit_amount=0,
+                note=f"{quote.premium_starts_on:%d/%m/%Y} – {quote.premium_ends_on:%d/%m/%Y}",
+            ))
+            self._audit(employee_id, "ACTIVATE_PREMIUM", "PremiumMembership", membership.id,
+                        {"customer_id": customer_id, "days": premium_days, "price": str(quote.premium_fee), "order_id": order.id})
         for source, amount in quote.discount_sources.items():
             self.orders_queries.add_order_discount(OrderDiscount(order_id=order.id, source=source, amount=amount, source_code=quote.discount_source_codes.get(source)))
         customer = self.orders_queries.get_customer(customer_id)
@@ -1044,9 +1169,15 @@ class _StoreOperations:
             else:
                 copy.status = CopyStatus.SOLD
             self._status_history(copy, before, copy.status, f"Phiếu {code}", employee_id)
-        paid = sum((Decimal(p.amount) for p in payments), Decimal("0"))
+        remaining_premium = quote.premium_fee
         for payment in payments:
-            self.orders_queries.add_payment_transaction(PaymentTransaction(order_id=order.id, customer_id=customer_id, employee_id=employee_id, method=payment.method, category='CHECKOUT', amount=Decimal(payment.amount)))
+            amount = Decimal(payment.amount)
+            premium_amount = min(amount, remaining_premium)
+            if premium_amount:
+                self.orders_queries.add_payment_transaction(PaymentTransaction(order_id=order.id, customer_id=customer_id, employee_id=employee_id, method=payment.method, category='PREMIUM', amount=premium_amount))
+                remaining_premium -= premium_amount
+            if amount - premium_amount or not premium_days:
+                self.orders_queries.add_payment_transaction(PaymentTransaction(order_id=order.id, customer_id=customer_id, employee_id=employee_id, method=payment.method, category='CHECKOUT', amount=amount - premium_amount))
         if paid < quote.total_due:
             order.status = "PARTIALLY_PAID"
         self._audit(employee_id, "CHECKOUT", "Order", order.id, {
@@ -1087,6 +1218,11 @@ class _StoreOperations:
             for line, copy, term in lines
         ]
 
+    def customer_rental_history(self, customer_id: int, page_request: PageRequest = PageRequest()):
+        if not self.customers_queries.customer(customer_id):
+            raise BusinessError("Không tìm thấy khách hàng.")
+        return self.orders_queries.customer_rental_history(customer_id, page_request)
+
     def order_receipt(self, order_id: int) -> OrderReceipt:
         row = self.orders_queries.order_with_parties(order_id).one_or_none()
         if not row:
@@ -1102,7 +1238,7 @@ class _StoreOperations:
             for payment in self.orders_queries.fetch_order_receipt_payments(order_id)
         )
         checkout_paid = sum(
-            (payment.amount for payment in payments if payment.category in ("CHECKOUT", "RENTAL_TO_SALE")), Decimal("0")
+            (payment.amount for payment in payments if payment.category in ("CHECKOUT", "PREMIUM", "RENTAL_TO_SALE")), Decimal("0")
         )
         legacy_applied = sum((Decimal(line.discount_amount) for line, _copy, _term in line_rows
                               if line.source_rental_line_id and order.deposit_applied is None), Decimal("0"))
@@ -1415,22 +1551,45 @@ class _StoreOperations:
             self.allocate_waiting_reservations(copy.item_id)
         return copy
 
-    def reserve(self, customer_id: int, item_ids: list[int], actor_id: int | None = None) -> list[Reservation]:
+    def reserve(self, customer_id: int, item_ids: list[int], actor_id: int | None = None, *, copy_ids: dict[int, int] | None = None) -> list[Reservation]:
         if not item_ids:
             raise BusinessError("Cần chọn ít nhất một phim hoặc tập phim để đặt trước.")
-        if not self.reservations_queries.get_customer(customer_id):
+        if not self.reservations_queries.get_customer(customer_id, lock=True):
             raise BusinessError("Không tìm thấy khách hàng.")
         items = list(self.reservations_queries.fetch_reserve_items(item_ids))
         if len(items) != len(set(item_ids)):
             raise BusinessError("Có phim hoặc tập phim không tồn tại.")
         if any(not item.can_rent and not item.can_sell for item in items):
             raise BusinessError("Phim đặt trước phải cho phép thuê hoặc bán.")
+        copy_ids = copy_ids or {}
+        if set(copy_ids) - set(item_ids) or len(set(copy_ids.values())) != len(copy_ids):
+            raise BusinessError("Danh sách bản đĩa được chọn không hợp lệ.")
+        for item_id in sorted(set(item_ids)):
+            self.expire_reservation_holds(item_id=item_id)
+            self.allocate_waiting_reservations(item_id)
+        selected_copies = {}
+        items_by_id = {item.id: item for item in items}
+        for item_id, copy_id in sorted(copy_ids.items(), key=lambda pair: pair[1]):
+            copy = self.reservations_queries.lock_copy(copy_id)
+            item = items_by_id[item_id]
+            if (copy is None or copy.item_id != item_id or copy.status != CopyStatus.AVAILABLE
+                    or (item.release_date and item.release_date > date.today())
+                    or not ((item.can_rent and copy.can_rent) or (item.can_sell and copy.can_sell))):
+                raise BusinessError("Bản đĩa đã chọn không còn phù hợp hoặc chưa phát hành; hãy chọn lại.")
+            selected_copies[item_id] = copy
         reservations = []
         for item_id in set(item_ids):
             duplicate = self.reservations_queries.fetch_reserve_duplicate(customer_id, item_id)
             if duplicate:
                 raise BusinessError("Khách hàng đã có đặt trước đang hiệu lực cho item này.")
             reservation = Reservation(customer_id=customer_id, item_id=item_id)
+            if item_id in selected_copies:
+                copy = selected_copies[item_id]
+                reservation.state = ReservationState.HELD
+                reservation.allocated_copy_id = copy.id
+                reservation.hold_until = datetime.now(timezone.utc) + timedelta(hours=24)
+                copy.status = CopyStatus.HELD
+                self._status_history(copy, CopyStatus.AVAILABLE, CopyStatus.HELD, "Giữ cho đặt trước", actor_id)
             self.reservations_queries.add_reservation(reservation)
             reservations.append(reservation)
         self.reservations_queries.flush()
@@ -1480,8 +1639,8 @@ class _StoreOperations:
         for item_id in sorted(released_items):
             self.allocate_waiting_reservations(item_id)
 
-    def query_reservations(self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created", True), *, text: str = "") -> PagedResult[ReservationView]:
-        return self.reservations_queries.query_reservations(page_request, sort, text=text)
+    def query_reservations(self, page_request: PageRequest = PageRequest(), sort: SortSpec = SortSpec("created", True), *, text: str = "", state: ReservationState | tuple[ReservationState, ...] | None = None, search_field: str = "all", fulfilled_action: LineAction | None = None) -> PagedResult[ReservationView]:
+        return self.reservations_queries.query_reservations(page_request, sort, text=text, state=state, search_field=search_field, fulfilled_action=fulfilled_action)
 
     def customer_preorder_copies(self, customer_id: int) -> list[CopyChoice]:
         self.expire_reservation_holds()
@@ -1576,6 +1735,13 @@ class _StoreOperations:
             raise BusinessError("Loại giao dịch không hợp lệ.")
         since = datetime.now(timezone.utc) - timedelta(days=30)
         return [(title, int(count)) for title, count in self.dashboard_queries.popular(action, since)]
+
+    def dashboard_popular_targets(self, action: LineAction):
+        if action not in (LineAction.RENT, LineAction.BUY):
+            raise BusinessError("Loại giao dịch không hợp lệ.")
+        since = datetime.now(timezone.utc) - timedelta(days=30)
+        return [(show_id, item_id, title, int(count)) for show_id, item_id, title, count
+                in self.dashboard_queries.popular_targets(action, since)]
 
     def dashboard_upcoming(self):
         return [(int(item_id), title, release_date) for item_id, title, release_date in self.dashboard_queries.upcoming(date.today())]

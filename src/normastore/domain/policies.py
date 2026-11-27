@@ -16,8 +16,8 @@ def round_thousand(value: Decimal) -> Decimal:
     return (value / THOUSAND).quantize(Decimal("1"), rounding=ROUND_UP) * THOUSAND
 
 
-def effective_deposit(base: Decimal, premium: bool) -> Decimal:
-    return round_thousand(money(base) * (Decimal("0.70") if premium else Decimal("1")))
+def effective_deposit(base: Decimal, premium: bool, discount_percent: Decimal = Decimal("30")) -> Decimal:
+    return round_thousand(money(base) * (Decimal("1") - discount_percent / Decimal("100") if premium else Decimal("1")))
 
 
 def effective_price(base: Decimal, item_mode: str, item_percent: Decimal,

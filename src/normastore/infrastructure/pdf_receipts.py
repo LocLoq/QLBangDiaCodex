@@ -44,7 +44,7 @@ class PdfReceiptExporter:
 
     @staticmethod
     def _action(action: LineAction) -> str:
-        return "Thuê" if action == LineAction.RENT else "Mua"
+        return {LineAction.RENT: "Thuê", LineAction.BUY: "Mua", LineAction.PREMIUM: "Hội viên"}[action]
 
     @staticmethod
     def _rental_state(value: str | None) -> str:

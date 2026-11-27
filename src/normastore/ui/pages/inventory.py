@@ -12,6 +12,7 @@ from normastore.domain.enums import (
     CopyCondition,
     CopyStatus,
 )
+from normastore.ui.csv_import import export_template, import_file
 
 STATUS_LABELS = {
     CopyStatus.AVAILABLE: "Có sẵn", CopyStatus.HELD: "Đang giữ",
@@ -60,6 +61,8 @@ class InventoryPageMixin:
         for label, variable in zip(("Dãy", "Kệ", "Ngăn"), location_filters):
             ttk.Label(location_bar, text=label).pack(side=LEFT)
             ttk.Entry(location_bar, textvariable=variable, width=16).pack(side=LEFT, padx=5)
+        ttk.Label(location_bar, text="Giữ Ctrl hoặc Shift để chọn nhiều bản đĩa.",
+                  bootstyle="secondary").pack(side=LEFT, padx=8)
         page_number = tk.IntVar(value=1)
         sort_state: dict[str, object] = {"field": "title", "descending": False}
         tree_frame = ttk.Frame(page)
@@ -254,6 +257,91 @@ class InventoryPageMixin:
                 side=RIGHT, padx=6
             )
 
+        def edit_selected_copies():
+            selected = tree.selection()
+            if not selected or any(row not in rows for row in selected):
+                return messagebox.showinfo("Kho đĩa", "Hãy chỉ chọn các bản đĩa cần sửa.", parent=self)
+            if not self._can_manage():
+                return messagebox.showerror("Kho đĩa", "Chỉ Quản lý/Quản trị viên được sửa kho.", parent=self)
+            if len(selected) == 1:
+                return edit_copy()
+            dialog = self._dialog("Sửa nhiều bản đĩa", 690, 720)
+            footer = ttk.Frame(dialog, padding=(14, 0, 14, 14))
+            footer.pack(fill=X, side="bottom")
+            body = ScrolledFrame(dialog, padding=14, autohide=False)
+            body.pack(fill=BOTH, expand=True)
+            ttk.Label(body, text=f"Đã chọn {len(selected)} đĩa. Đánh dấu các trường cần thay đổi.").grid(
+                row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
+            )
+            field_specs = (
+                ("media_format", "Định dạng", ("VHS", "VCD", "DVD", "Blu-ray")),
+                ("condition", "Tình trạng", tuple(CONDITION_LABELS.values())),
+                ("status", "Trạng thái", tuple(STATUS_LABELS[value] for value in
+                 (CopyStatus.AVAILABLE, CopyStatus.INSPECTION, CopyStatus.REPAIR, CopyStatus.LOST, CopyStatus.RETIRED))),
+                ("can_rent", "Cho thuê", ("Có", "Không")),
+                ("can_sell", "Cho bán", ("Có", "Không")),
+                ("condition_percent", "Tình trạng (%)", None),
+                ("aisle", "Dãy", None), ("rack", "Kệ", None), ("compartment", "Ngăn", None),
+                ("rental_price_mode", "Cách tính giá thuê", tuple(PRICE_MODES)),
+                ("rental_price_override", "Giá thuê riêng", None),
+                ("rental_price_percent", "Tỷ lệ giá thuê (%)", None),
+                ("sale_price_mode", "Cách tính giá bán", tuple(PRICE_MODES)),
+                ("sale_price_override", "Giá bán riêng", None),
+                ("sale_price_percent", "Tỷ lệ giá bán (%)", None),
+            )
+            fields = {}
+            for index, (name, label, choices) in enumerate(field_specs, 1):
+                enabled = tk.BooleanVar(value=False)
+                value = tk.StringVar(value=choices[0] if choices else "")
+                fields[name] = (enabled, value)
+                ttk.Checkbutton(body, text=label, variable=enabled).grid(row=index, column=0, sticky="w", pady=3)
+                control = (ttk.Combobox(body, textvariable=value, values=choices, state="readonly")
+                           if choices else ttk.Entry(body, textvariable=value))
+                control.grid(row=index, column=1, sticky="ew", pady=3)
+            note = tk.StringVar()
+            ttk.Label(body, text="Ghi chú đổi trạng thái").grid(row=len(field_specs) + 1, column=0, sticky="w", pady=4)
+            ttk.Entry(body, textvariable=note).grid(row=len(field_specs) + 1, column=1, sticky="ew", pady=4)
+            body.columnconfigure(1, weight=1)
+
+            def save():
+                try:
+                    changes = {}
+                    for name, (enabled, value) in fields.items():
+                        if not enabled.get():
+                            continue
+                        raw = value.get().strip()
+                        if name == "condition":
+                            changes[name] = next(key for key, label in CONDITION_LABELS.items() if label == raw)
+                        elif name == "status":
+                            changes[name] = next(key for key, label in STATUS_LABELS.items() if label == raw)
+                        elif name in ("can_rent", "can_sell"):
+                            changes[name] = raw == "Có"
+                        elif name in ("rental_price_mode", "sale_price_mode"):
+                            changes[name] = PRICE_MODES[raw]
+                        elif name in ("condition_percent", "rental_price_override", "sale_price_override",
+                                      "rental_price_percent", "sale_price_percent"):
+                            changes[name] = Decimal(raw.replace(",", ".")) if raw else None
+                        else:
+                            changes[name] = raw
+                    if note.get().strip():
+                        changes["note"] = note.get()
+                    for prefix in ("rental", "sale"):
+                        mode_key = f"{prefix}_price_mode"
+                        if mode_key in changes:
+                            if changes[mode_key] != "DIRECT":
+                                changes[f"{prefix}_price_override"] = None
+                            if changes[mode_key] != "PERCENT":
+                                changes[f"{prefix}_price_percent"] = None
+                    count = self.store.update_inventory_copies([int(row) for row in selected], changes, self.account.employee_id)
+                    dialog.destroy()
+                    refresh()
+                    messagebox.showinfo("Kho đĩa", f"Đã sửa {count} bản đĩa.", parent=self)
+                except Exception as exc:
+                    messagebox.showerror("Kho đĩa", str(exc), parent=dialog)
+
+            ttk.Button(footer, text="Lưu", command=save, bootstyle="primary").pack(side=RIGHT)
+            ttk.Button(footer, text="Hủy", command=dialog.destroy, bootstyle="secondary").pack(side=RIGHT, padx=6)
+
         def inspect(target_status: CopyStatus):
             selected = tree.selection()
             if len(selected) != 1 or selected[0] not in rows:
@@ -345,6 +433,11 @@ class InventoryPageMixin:
 
         ttk.Button(filters, text="Lọc", command=refresh, bootstyle="secondary").pack(side=LEFT)
         ttk.Button(filters, text="Thêm đĩa", command=add_copy, state="normal" if self._can_manage() else "disabled").pack(side=LEFT, padx=4)
+        ttk.Button(filters, text="Sửa đã chọn", command=edit_selected_copies,
+                   state="normal" if self._can_manage() else "disabled").pack(side=LEFT, padx=4)
+        ttk.Button(filters, text="Nhập CSV", command=lambda: import_file(self, "copies", refresh),
+                   state="normal" if self._can_manage() else "disabled").pack(side=LEFT, padx=4)
+        ttk.Button(filters, text="Tải mẫu CSV", command=lambda: export_template(self, "copies")).pack(side=LEFT, padx=4)
         def copy_menu(event):
             item = tree.identify_row(event.y)
             if item in nodes:
@@ -366,10 +459,11 @@ class InventoryPageMixin:
                 return
             if item not in rows:
                 return
-            tree.selection_set(item)
+            if item not in tree.selection():
+                tree.selection_set(item)
             tree.focus(item)
             menu = tk.Menu(tree, tearoff=False)
-            menu.add_command(label="Sửa bản đĩa", command=edit_copy,
+            menu.add_command(label="Sửa bản đĩa đã chọn", command=edit_selected_copies,
                              state="normal" if self._can_manage() else "disabled")
             menu.add_command(label="Duyệt vào kho", command=lambda: inspect(CopyStatus.AVAILABLE))
             menu.add_command(label="Chuyển sửa chữa", command=lambda: inspect(CopyStatus.REPAIR))
@@ -384,7 +478,7 @@ class InventoryPageMixin:
             refresh()
         tree.heading("#0", text="Phim / bộ / mùa / đĩa", command=change_sort)
         tree.bind("<<TreeviewOpen>>", load_node)
-        tree.bind("<Double-1>", lambda event: edit_copy(event) if tree.selection() and tree.selection()[0] in rows else None)
+        tree.bind("<Double-1>", lambda event: edit_selected_copies() if tree.selection() and tree.selection()[0] in rows else None)
         search_timer = {}
         def filter_changed(*_args):
             if not navigation["suppress"]:
@@ -439,5 +533,7 @@ class InventoryPageMixin:
                 tree.selection_set(target)
                 tree.see(target)
 
+        page.add_copy = add_copy
+        page.import_copies_csv = lambda: import_file(self, "copies", refresh)
         page.show_item = show_item
         page.refresh = refresh

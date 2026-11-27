@@ -1,0 +1,4 @@
+﻿item_id,quantity,media_format,can_rent,can_sell,aisle,rack,compartment
+1,2,DVD,1,1,A,01,01
+2,1,Blu-ray,1,1,A,01,02
+3,1,DVD,1,0,A,02,01

@@ -143,12 +143,9 @@ class OrdersPageMixin:
         ttk.Button(filters, text="Lọc", command=apply_dates).pack(side=LEFT, padx=6)
         ttk.Button(filters, text="Xóa lọc ngày", command=clear_dates, bootstyle="secondary").pack(side=LEFT)
 
-        def detail(_event=None):
-            selected = tree.selection()
-            if len(selected) != 1:
-                return
+        def open_order(order_id):
             try:
-                order, lines = self.store.order_detail(int(selected[0]))
+                order, lines = self.store.order_detail(order_id)
             except Exception as exc:
                 return messagebox.showerror("Phiếu", str(exc), parent=self)
             dialog = tb.Toplevel(self)
@@ -185,7 +182,7 @@ class OrdersPageMixin:
                     text=line.title,
                     values=(
                         line.barcode or "—",
-                        "Thuê" if line.action == LineAction.RENT else "Mua",
+                        {LineAction.RENT: "Thuê", LineAction.BUY: "Mua", LineAction.PREMIUM: "Hội viên"}[line.action],
                         vnd(line.unit_price),
                         vnd(line.deposit),
                         line.due_date or "—",
@@ -199,6 +196,13 @@ class OrdersPageMixin:
                 command=lambda: export_pdf(order.order_id, order.code, dialog),
                 bootstyle="secondary",
             ).pack(anchor="e", pady=(8, 0))
+
+        page.open_order = open_order
+
+        def detail(_event=None):
+            selected = tree.selection()
+            if len(selected) == 1:
+                open_order(int(selected[0]))
 
         tree.bind("<Double-1>", detail)
         tree.bind(

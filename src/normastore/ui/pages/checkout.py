@@ -31,13 +31,15 @@ class CheckoutPageMixin:
         ttk.Entry(top, textvariable=customer_search_var, width=18).pack(side=LEFT, padx=(6, 0))
         customer_combo.pack(side=LEFT, padx=6)
         ttk.Button(
-            top, text="Thêm khách", command=lambda: self._quick_customer(customer_combo)
+            top, text="Thêm khách", command=lambda: self._quick_customer(customer_combo, on_saved=select_new_customer)
         ).pack(side=LEFT)
         ttk.Label(top, text="Hạn trả:").pack(side=LEFT, padx=(18, 3))
         due_entry = tb.DateEntry(top, dateformat="%d/%m/%Y", startdate=date.today() + timedelta(days=3), popup_title="Chọn hạn trả", width=11)
         due_entry.pack(side=LEFT)
         voucher_var = tk.StringVar()
         combo_var = tk.StringVar()
+        premium_var = tk.StringVar(value="Không đăng ký")
+        premium_period = tk.StringVar(value="")
         customer_details = tk.StringVar(value="Chọn khách hàng để xem thông tin.")
         ttk.Label(page, textvariable=customer_details, wraplength=1100, justify=LEFT).pack(anchor="w", pady=(0, 6))
         pane = ttk.Panedwindow(page, orient="horizontal")
@@ -234,7 +236,7 @@ class CheckoutPageMixin:
         cart.column("due", width=75, minwidth=55)
         summary = ttk.Frame(cart_frame, padding=(0, 5))
         summary.columnconfigure(1, weight=1)
-        amounts = {name: tk.StringVar(value="0 đ") for name in ("gross", "voucher", "combo", "premium", "discovery", "deposit")}
+        amounts = {name: tk.StringVar(value="0 đ") for name in ("gross", "voucher", "combo", "premium", "discovery", "deposit", "premium_fee")}
         ttk.Label(summary, text="Tổng trước giảm giá:").grid(row=0, column=0, sticky="w")
         ttk.Label(summary, textvariable=amounts["gross"]).grid(row=0, column=2, sticky="e")
         ttk.Label(summary, text="Voucher:").grid(row=1, column=0, sticky="w")
@@ -250,6 +252,11 @@ class CheckoutPageMixin:
         for row, (name, label) in enumerate((("premium", "Premium:"), ("discovery", "Khám phá:"), ("deposit", "Tiền cọc:")), 3):
             ttk.Label(summary, text=label).grid(row=row, column=0, sticky="w")
             ttk.Label(summary, textvariable=amounts[name]).grid(row=row, column=2, sticky="e")
+        ttk.Label(summary, text="Gói hội viên:").grid(row=6, column=0, sticky="w")
+        premium_combo = ttk.Combobox(summary, textvariable=premium_var, state="readonly", width=18)
+        premium_combo.grid(row=6, column=1, sticky="ew", padx=6)
+        ttk.Label(summary, textvariable=amounts["premium_fee"]).grid(row=6, column=2, sticky="e")
+        ttk.Label(summary, textvariable=premium_period).grid(row=7, column=0, columnspan=3, sticky="w")
         total_var = tk.StringVar(value="Tổng cần thu: 0 đ")
         total_label = ttk.Label(
             cart_frame, textvariable=total_var, font=("Segoe UI", 11, "bold"), bootstyle="success"
@@ -264,6 +271,7 @@ class CheckoutPageMixin:
         customers: dict[str, CustomerView] = {}
         combos = {}
         vouchers = {}
+        premium_plans = {}
         preorder_customer = {"id": None}
         auto_copy_ids: set[int] = set()
         skipped_preorder_ids: set[int] = set()
@@ -336,6 +344,20 @@ class CheckoutPageMixin:
                     label = f"{voucher.code} — {voucher.description}"
                     vouchers[label] = voucher.code
             voucher_combo["values"] = ["", *vouchers]
+            premium_plans.clear()
+            premium_plans.update({f"{plan.days} ngày — {vnd(plan.price)}": plan.days for plan in self.store.premium_plans()})
+            premium_combo["values"] = ["Không đăng ký", *premium_plans]
+            if premium_var.get() not in premium_combo["values"]:
+                premium_var.set("Không đăng ký")
+
+        def select_new_customer(customer):
+            customer_search_var.set(customer.phone)
+            refresh_customers()
+            label = next((key for key, value in customers.items() if value.id == customer.id), None)
+            if label:
+                customer_var.set(label)
+
+        page.select_customer = select_new_customer
 
         def voucher_code():
             value = voucher_var.get().strip()
@@ -705,28 +727,62 @@ class CheckoutPageMixin:
             load_seasons()
             if initial_action and season_var.get():
                 prepare(initial_action)
+            return dialog
 
         ttk.Button(picker_filters, text="Chọn phim bộ", command=lambda: select_season()).pack(side=RIGHT, padx=4)
 
         def update_quote():
             for variable in amounts.values():
                 variable.set("0 đ")
+            premium_period.set("")
             customer = customers.get(customer_var.get())
-            if not customer or not cart_lines:
+            if not customer or (not cart_lines and premium_var.get() not in premium_plans):
                 total_var.set("Tổng cần thu: 0 đ")
                 return
             try:
-                quote = self.store.quote(customer.id, cart_lines, voucher_code(), combo_ids())
+                quote = self.store.quote(customer.id, cart_lines, voucher_code(), combo_ids(), premium_plans.get(premium_var.get()))
                 amounts["gross"].set(vnd(quote.gross))
                 amounts["deposit"].set(vnd(quote.deposit))
+                amounts["premium_fee"].set(vnd(quote.premium_fee))
+                if quote.premium_starts_on:
+                    premium_period.set(f"Hiệu lực {quote.premium_starts_on:%d/%m/%Y} – {quote.premium_ends_on:%d/%m/%Y}")
                 for source in ("voucher", "combo", "premium", "discovery"):
                     amounts[source].set(f"- {vnd(quote.discount_sources.get(source.upper(), Decimal('0')))}")
                 total_var.set(f"Tổng cần thu: {vnd(quote.total_due)}")
             except Exception as exc:
                 total_var.set(f"Kiểm tra: {exc}")
 
-        def remove():
-            ids = cart.selection()
+        def reserve_items(item_ids):
+            customer = customers.get(customer_var.get())
+            if not customer:
+                return messagebox.showinfo("Đặt trước", "Hãy chọn khách hàng.", parent=self)
+            try:
+                self.store.reserve(customer.id, item_ids, self.account.employee_id)
+                messagebox.showinfo("Đặt trước", "Đã ghi nhận đặt trước.", parent=self)
+                pending_reservation.clear()
+                reserve_label.set("")
+                reserve_button.configure(state="disabled")
+            except Exception as exc:
+                messagebox.showerror("Đặt trước", str(exc), parent=self)
+
+        pending_reservation = []
+        def open_reservations(item_ids):
+            pending_reservation[:] = list(dict.fromkeys(item_ids))
+            titles = [self.store.catalog_item(item_id).title for item_id in pending_reservation]
+            reserve_label.set("Đặt trước: " + ", ".join(titles))
+            reserve_button.configure(state="normal")
+
+        reserve_label = tk.StringVar(value="")
+        ttk.Label(cart_frame, textvariable=reserve_label, wraplength=320).pack(side="bottom", anchor="w")
+        reserve_button = ttk.Button(cart_frame, text="Đặt trước phim đã chọn",
+                                    command=lambda: reserve_items(pending_reservation), state="disabled")
+        reserve_button.pack(side="bottom", anchor="w")
+        page.open_reservations = open_reservations
+        page.open_reservation = lambda item_id: open_reservations([item_id])
+        page.select_season = select_season
+
+        def remove(ids=None):
+            ids = cart.selection() if ids is None else ids
             if ids:
                 selected_ids = {int(value) for value in ids}
                 skipped_preorder_ids.update(selected_ids)
@@ -737,12 +793,15 @@ class CheckoutPageMixin:
                 update_quote()
                 refresh_catalog()
 
+        def clear_cart():
+            remove(cart.get_children())
+
         def checkout():
             customer = customers.get(customer_var.get())
             if not customer:
                 return messagebox.showerror("Phiếu", "Hãy chọn khách hàng.", parent=self)
             try:
-                quote = self.store.quote(customer.id, cart_lines, voucher_code(), combo_ids())
+                quote = self.store.quote(customer.id, cart_lines, voucher_code(), combo_ids(), premium_plans.get(premium_var.get()))
                 received = simpledialog.askstring(
                     "Thanh toán",
                     f"Số tiền nhận (mặc định {quote.total_due:,.0f}):",
@@ -754,9 +813,10 @@ class CheckoutPageMixin:
                 method = self._choose_payment_method("Thanh toán", self)
                 if method is None:
                     return
-                order = self.store.checkout(customer.id, self.account.employee_id, cart_lines, [PaymentInput(method, Decimal(received))], voucher_code(), combo_ids(), expected_quote=quote)
+                order = self.store.checkout(customer.id, self.account.employee_id, cart_lines, [PaymentInput(method, Decimal(received))], voucher_code(), combo_ids(), expected_quote=quote, premium_days=premium_plans.get(premium_var.get()))
                 messagebox.showinfo("Hoàn tất", f"Đã tạo phiếu {order.code}.", parent=self)
                 cart_lines.clear()
+                premium_var.set("Không đăng ký")
                 auto_copy_ids.clear()
                 skipped_preorder_ids.clear()
                 cart.delete(*cart.get_children())
@@ -773,10 +833,12 @@ class CheckoutPageMixin:
         buy_button = ttk.Button(
             buttons, text="+ Mua", command=lambda: add(LineAction.BUY), bootstyle="success"
         )
-        remove_button = ttk.Button(buttons, text="Bỏ dòng", command=remove, bootstyle="secondary")
+        remove_button = ttk.Button(buttons, text="Xóa dòng", command=remove, bootstyle="secondary")
         rent_button.pack(side=LEFT, padx=2)
         buy_button.pack(side=LEFT, padx=2)
         remove_button.pack(side=LEFT, padx=2)
+        ttk.Button(buttons, text="Xóa tất cả", command=clear_cart, bootstyle="secondary").pack(side=LEFT, padx=2)
+        cart.bind("<Delete>", lambda _event: remove())
         ttk.Button(buttons, text="Hoàn tất", command=checkout, bootstyle="warning").pack(
             side=RIGHT, padx=2
         )
@@ -850,6 +912,7 @@ class CheckoutPageMixin:
         customer_var.trace_add("write", lambda *_: (show_customer(), sync_preorders(), update_quote(), reset_picker()))
         voucher_var.trace_add("write", lambda *_: update_quote())
         combo_var.trace_add("write", lambda *_: update_quote())
+        premium_var.trace_add("write", lambda *_: update_quote())
 
         def refresh():
             picker_genres.clear()

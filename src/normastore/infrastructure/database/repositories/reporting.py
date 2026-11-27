@@ -221,6 +221,21 @@ class ReportingRepository:
             .limit(10)
         ).all()
 
+    def top_customers(self):
+        total = func.sum(self._net_line_revenue())
+        order_count = func.count(func.distinct(Order.id))
+        return self.session.execute(
+            select(Customer.id, Customer.full_name, Customer.phone, order_count, total)
+            .select_from(OrderLine)
+            .join(Order, OrderLine.order_id == Order.id)
+            .join(Customer, Order.customer_id == Customer.id)
+            .where(OrderLine.action.in_((LineAction.RENT, LineAction.BUY, LineAction.PREMIUM)),
+                   *self._period(Order.created_at))
+            .group_by(Customer.id, Customer.full_name, Customer.phone)
+            .order_by(total.desc(), Customer.full_name, Customer.id)
+            .limit(10)
+        ).all()
+
     def combo_codes(self):
         return self.session.scalars(
             select(OrderDiscount.source_code)

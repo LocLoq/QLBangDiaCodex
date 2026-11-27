@@ -43,8 +43,17 @@ class StatisticsPageMixin:
         end_entry = tb.DateEntry(heading, dateformat="%d/%m/%Y", popup_title="Đến ngày", width=10)
         end_entry.entry.delete(0, END)
         end_entry.pack(side=LEFT)
-        page = ScrolledFrame(root_page, autohide=False)
+        sections = ttk.Notebook(root_page)
+        sections.pack(fill=BOTH, expand=True)
+        overview_tab, finance_tab, inventory_tab = (ttk.Frame(sections) for _ in range(3))
+        for tab, title in ((overview_tab, "Tổng quan"), (finance_tab, "Tài chính"), (inventory_tab, "Kho")):
+            sections.add(tab, text=title)
+        page = ScrolledFrame(overview_tab, autohide=False)
         page.pack(fill=BOTH, expand=True)
+        finance_page = ScrolledFrame(finance_tab, autohide=False)
+        finance_page.pack(fill=BOTH, expand=True)
+        inventory_page = ScrolledFrame(inventory_tab, autohide=False)
+        inventory_page.pack(fill=BOTH, expand=True)
         filters = ttk.Frame(page, padding=(0, 5))
         filters.pack(fill=X)
         action_var = tk.StringVar(value="Tất cả giao dịch")
@@ -58,19 +67,27 @@ class StatisticsPageMixin:
         genre_control.pack(side=LEFT, padx=6)
         ttk.Label(page, text="Biểu đồ phim theo bộ lọc; chỉ số cửa hàng theo kỳ, tồn kho là trạng thái hiện tại.", bootstyle="secondary").pack(anchor="w")
         stats = tk.StringVar()
-        stats_label = ttk.Label(page, textvariable=stats, font=("Segoe UI", 13), justify=LEFT)
-        stats_label.pack(anchor="w", pady=15)
+        stats_label = ttk.Label(finance_page, textvariable=stats, font=("Segoe UI", 13), justify=LEFT)
+        stats_label.pack(anchor="w")
+        finance_figure = Figure(figsize=(11, 14), dpi=100)
+        finance_axes = finance_figure.subplots(4, 2).flat
+        finance_axes = list(finance_axes)
+        finance_chart = FigureCanvasTkAgg(finance_figure, master=finance_page)
+        finance_chart.get_tk_widget().pack(fill=X)
+        inventory_stats = tk.StringVar()
+        ttk.Label(inventory_page, textvariable=inventory_stats, justify=LEFT).pack(anchor="w", pady=8)
         tables = ttk.PanedWindow(page, orient="horizontal")
         tables.pack(fill=BOTH, expand=True)
         top_frame = ttk.Frame(tables, padding=4)
         overdue_frame = ttk.Labelframe(tables, text="Khách hàng quá hạn", padding=8)
-        stockout_frame = ttk.Labelframe(tables, text="Hết hàng và ngày dự kiến có lại", padding=8)
+        stockout_frame = ttk.Labelframe(inventory_page, text="Hết hàng và ngày dự kiến có lại", padding=8)
         tables.add(top_frame, weight=1)
         tables.add(overdue_frame, weight=1)
-        tables.add(stockout_frame, weight=1)
+        stockout_frame.pack(fill=BOTH, expand=True, pady=8)
         top_tabs = ttk.Notebook(top_frame)
         top_tabs.pack(fill=BOTH, expand=True)
-        rental_tab, sale_tab, combo_tab, voucher_tab = (
+        rental_tab, sale_tab, customer_tab, combo_tab, voucher_tab = (
+            ttk.Frame(top_tabs, padding=6),
             ttk.Frame(top_tabs, padding=6),
             ttk.Frame(top_tabs, padding=6),
             ttk.Frame(top_tabs, padding=6),
@@ -78,6 +95,7 @@ class StatisticsPageMixin:
         )
         top_tabs.add(rental_tab, text="Top thuê")
         top_tabs.add(sale_tab, text="Top bán")
+        top_tabs.add(customer_tab, text="Top khách hàng")
         top_tabs.add(combo_tab, text="Top combo")
         top_tabs.add(voucher_tab, text="Top voucher")
         top_tree = self._create_treeview(
@@ -94,6 +112,18 @@ class StatisticsPageMixin:
         sale_tree.heading("count", text="Lượt bán")
         sale_tree.column("count", width=90, anchor="e")
         sale_tree.pack(fill=BOTH, expand=True)
+        ttk.Label(customer_tab, text="Theo giá trị hóa đơn sau giảm, không gồm cọc", bootstyle="secondary").pack(anchor="w")
+        customer_tree = self._create_treeview(
+            customer_tab, columns=("phone", "orders", "total"), show="tree headings", height=11
+        )
+        for column, title in (("#0", "Khách hàng"), ("phone", "SĐT"),
+                              ("orders", "Số phiếu"), ("total", "Giá trị hóa đơn")):
+            customer_tree.heading(column, text=title)
+        customer_tree.column("#0", width=160, minwidth=100)
+        customer_tree.column("phone", width=100, minwidth=85)
+        customer_tree.column("orders", width=75, minwidth=60, anchor="e")
+        customer_tree.column("total", width=140, minwidth=100, anchor="e")
+        customer_tree.pack(fill=BOTH, expand=True)
         combo_tree = self._create_treeview(
             combo_tab, columns=("count",), show="tree headings", height=11
         )
@@ -124,9 +154,9 @@ class StatisticsPageMixin:
         stockout_tree.heading("eta", text="Ngày có lại dự kiến")
         stockout_tree.column("eta", width=110, anchor="e")
         stockout_tree.pack(fill=BOTH, expand=True)
-        chart_frame = ttk.Labelframe(page, text="Phân bổ tồn kho", padding=6)
+        chart_frame = ttk.Labelframe(inventory_page, text="Phân bổ tồn kho", padding=6)
         chart_frame.pack(fill=X, pady=(10, 0))
-        figure = Figure(figsize=(7.8, 2.3), dpi=100)
+        figure = Figure(figsize=(7.8, 4), dpi=100)
         self._figures.append(figure)
         axis = figure.add_subplot(111)
         self._style_figure(figure)
@@ -134,13 +164,22 @@ class StatisticsPageMixin:
         chart.get_tk_widget().pack(fill=X)
         analysis_frame = ttk.Labelframe(page, text="Phân tích theo bộ lọc", padding=6)
         analysis_frame.pack(fill=X, pady=(10, 0))
-        analysis_figure = Figure(figsize=(11, 8), dpi=100)
+        analysis_figure = Figure(figsize=(8, 4), dpi=100)
         self._figures.append(analysis_figure)
-        revenue_axis = analysis_figure.add_subplot(311)
-        damage_axis = analysis_figure.add_subplot(323)
-        genre_axis = analysis_figure.add_subplot(324)
+        genre_axis = analysis_figure.add_subplot(111)
         analysis_chart = FigureCanvasTkAgg(analysis_figure, master=analysis_frame)
         analysis_chart.get_tk_widget().pack(fill=X)
+        revenue_figure = Figure(figsize=(9, 4), dpi=100)
+        self._figures.append(revenue_figure)
+        revenue_axis = revenue_figure.add_subplot(111)
+        revenue_chart = FigureCanvasTkAgg(revenue_figure, master=finance_page)
+        revenue_chart.get_tk_widget().pack(fill=X)
+        damage_figure = Figure(figsize=(8, 4), dpi=100)
+        self._figures.append(damage_figure)
+        damage_axis = damage_figure.add_subplot(111)
+        damage_chart = FigureCanvasTkAgg(damage_figure, master=inventory_page)
+        damage_chart.get_tk_widget().pack(fill=X)
+        self._figures.append(finance_figure)
         revenue_points: list[tuple[float, str]] = []
         revenue_tooltip = None
         hovered_day: float | None = None
@@ -150,7 +189,7 @@ class StatisticsPageMixin:
             hovered_day = None
             if revenue_tooltip is not None and revenue_tooltip.get_visible():
                 revenue_tooltip.set_visible(False)
-                analysis_chart.draw_idle()
+                revenue_chart.draw_idle()
 
         def hover_revenue(event):
             nonlocal hovered_day
@@ -175,21 +214,36 @@ class StatisticsPageMixin:
             revenue_tooltip.set_color(self._palette.tooltip_foreground)
             revenue_tooltip.get_bbox_patch().set_facecolor(self._palette.tooltip_background)
             revenue_tooltip.set_visible(True)
-            analysis_chart.draw_idle()
+            revenue_chart.draw_idle()
 
-        analysis_chart.mpl_connect("motion_notify_event", hover_revenue)
-        analysis_chart.mpl_connect("figure_leave_event", hide_revenue_tooltip)
-        analysis_chart.mpl_connect("scroll_event", hide_revenue_tooltip)
-        analysis_chart.get_tk_widget().bind("<Unmap>", hide_revenue_tooltip, add="+")
-        chart_frame.pack_configure(before=stats_label)
-        analysis_frame.pack_configure(before=stats_label)
-        for table in (top_tree, sale_tree, combo_tree, voucher_tree, overdue_tree, stockout_tree):
-            def scroll_table(event, widget=table):
-                widget.yview_scroll(-int(event.delta / 120), "units")
+        revenue_chart.mpl_connect("motion_notify_event", hover_revenue)
+        revenue_chart.mpl_connect("figure_leave_event", hide_revenue_tooltip)
+        revenue_chart.mpl_connect("scroll_event", hide_revenue_tooltip)
+        revenue_chart.get_tk_widget().bind("<Unmap>", hide_revenue_tooltip, add="+")
+        for canvas, scroll_page in ((chart, inventory_page), (damage_chart, inventory_page),
+                                    (analysis_chart, page), (revenue_chart, finance_page),
+                                    (finance_chart, finance_page)):
+            def scroll_chart(event, target=scroll_page):
+                target.yview_scroll(-int(event.delta / 120), "units")
                 return "break"
-            table.bind("<MouseWheel>", scroll_table)
+            canvas.get_tk_widget().bind("<MouseWheel>", scroll_chart)
+        table_wheel_tag = f"NormaStatsTableWheel{id(root_page)}"
+
+        def scroll_table(event):
+            if event.num in (4, 5):
+                step = -1 if event.num == 4 else 1
+            else:
+                step = -int(event.delta / 120)
+            event.widget.yview_scroll(step, "units")
+            return "break"
+
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            root_page.bind_class(table_wheel_tag, sequence, scroll_table)
+        for table in (top_tree, sale_tree, customer_tree, combo_tree, voucher_tree, overdue_tree, stockout_tree):
+            table.bindtags((table_wheel_tag, *table.bindtags()))
         inventory_statuses = (
             CopyStatus.AVAILABLE,
+            CopyStatus.HELD,
             CopyStatus.RENTED,
             CopyStatus.INSPECTION,
             CopyStatus.REPAIR,
@@ -334,6 +388,7 @@ class StatisticsPageMixin:
                         ("Hoàn hàng bán", report.sales_refunded),
                         ("Cọc đang giữ", report.deposits_held),
                         ("Có sẵn", report.available),
+                        ("Đang giữ", report.held),
                         ("Đang thuê", report.rented),
                         ("Quá hạn", report.overdue_count),
                     ]:
@@ -344,6 +399,10 @@ class StatisticsPageMixin:
                     writer.writerow([])
                     writer.writerow(["Top bán", "Lượt"])
                     writer.writerows(report.top_sales)
+                    writer.writerow([])
+                    writer.writerow(["Top khách hàng", "SĐT", "Số phiếu", "Giá trị hóa đơn sau giảm, không gồm cọc"])
+                    writer.writerows((customer.customer_name, customer.phone, customer.order_count, customer.total)
+                                     for customer in report.top_customers)
                     writer.writerow([])
                     writer.writerow(["Top combo thuê", "Lượt"])
                     writer.writerows(report.top_combos)
@@ -396,7 +455,8 @@ class StatisticsPageMixin:
                 return
             try:
                 hide_revenue_tooltip()
-                analysis_figure.savefig(path, dpi=160, bbox_inches="tight")
+                selected_figure = (analysis_figure, revenue_figure, figure)[sections.index(sections.select())]
+                selected_figure.savefig(path, dpi=160, bbox_inches="tight")
                 messagebox.showinfo("Thống kê", "Đã xuất ảnh biểu đồ.", parent=self)
             except Exception as exc:
                 messagebox.showerror("Thống kê", str(exc), parent=self)
@@ -414,21 +474,49 @@ class StatisticsPageMixin:
             nonlocal hovered_day, revenue_tooltip
             report, chart_data = result
             discount_labels = {"DISCOVERY": "Khám phá", "COMBO": "Combo", "PREMIUM": "Hội viên", "VOUCHER": "Voucher"}
-            stats.set(
-                f"Tài chính\n• Doanh thu thuê phát sinh: {vnd(report.rental_revenue)}  • Doanh thu bán phát sinh: {vnd(report.sale_revenue)}\n"
-                f"• Doanh thu Premium phát sinh: {vnd(report.premium_revenue)}\n"
-                f"• Tiền đã thu (gồm cọc): {vnd(report.cash_collected)}  • Tiền đã hoàn: {vnd(report.cash_refunded)}  • Dòng tiền thuần: {vnd(report.net_cash_flow)}\n"
-                f"• Trước giảm: {vnd(report.gross_revenue)}  • Giảm giá: {vnd(report.discounts_granted)} ({report.average_discount_rate:.2f}%)\n"
-                f"• Premium: {report.active_premium_memberships} đang hiệu lực, {report.expired_premium_memberships} hết hạn\n"
-                f"• Khách hội viên: {report.premium_customer_count}  • Giảm theo nguồn: {', '.join(f'{discount_labels.get(name, name)} {vnd(amount)}' for name, amount in report.discounts_by_source) or '—'}\n"
-                f"• Thông báo: Email {report.email_notifications_sent}, SMS {report.sms_notifications_sent}, lỗi {report.notification_failures}\n"
-                f"• Phạt đã ghi nhận: {vnd(report.penalties_assessed)}  • Hoàn hàng bán: {vnd(report.sales_refunded)}\n"
-                f"• Cọc đang giữ: {vnd(report.deposits_held)}\n\n"
+            stats.set("")
+            groups = (
+                ("Doanh thu phát sinh", (("Thuê", report.rental_revenue), ("Bán", report.sale_revenue), ("Premium", report.premium_revenue)), True),
+                ("Dòng tiền (gồm cọc)", (("Đã thu", report.cash_collected), ("Đã hoàn", report.cash_refunded), ("Thuần", report.net_cash_flow)), True),
+                (f"Giá trị và giảm giá ({report.average_discount_rate:.2f}%)", (("Trước giảm", report.gross_revenue), ("Giảm giá", report.discounts_granted)), True),
+                ("Giảm giá theo nguồn", tuple((discount_labels.get(name, name), amount) for name, amount in report.discounts_by_source), True),
+                ("Phạt, hoàn hàng và cọc", (("Phạt ghi nhận", report.penalties_assessed), ("Hoàn hàng bán", report.sales_refunded), ("Cọc đang giữ", report.deposits_held)), True),
+                ("Hội viên", (("Đang hiệu lực", report.active_premium_memberships), ("Hết hạn", report.expired_premium_memberships), ("Khách hội viên", report.premium_customer_count)), False),
+                ("Thông báo", (("Email", report.email_notifications_sent), ("SMS", report.sms_notifications_sent), ("Lỗi", report.notification_failures)), False),
+            )
+            for axis_finance in finance_axes:
+                axis_finance.clear()
+            self._style_figure(finance_figure)
+            for axis_finance, (title, rows, currency) in zip(finance_axes, groups):
+                axis_finance.set_title(title)
+                axis_finance.grid(False)
+                if not rows:
+                    axis_finance.text(0.5, 0.5, "Không có dữ liệu", ha="center", va="center", transform=axis_finance.transAxes, color=self._palette.foreground)
+                    axis_finance.set_axis_off()
+                    continue
+                axis_finance.set_axis_on()
+                names, amounts = zip(*rows)
+                positions = list(range(len(names)))
+                axis_finance.barh(positions, [float(amount) for amount in amounts], color="#3b82f6")
+                axis_finance.set_yticks(positions, names)
+                axis_finance.invert_yaxis()
+                axis_finance.xaxis.set_visible(False)
+                for position, amount in zip(positions, amounts):
+                    label = vnd(amount, exact=True) if currency else f"{amount:,}"
+                    axis_finance.annotate(label, xy=(float(amount), position), xytext=(4, 0), textcoords="offset points", va="center", color=self._palette.foreground)
+                minimum, maximum = min(float(amount) for amount in amounts), max(float(amount) for amount in amounts)
+                span = max(maximum - min(minimum, 0), 1)
+                axis_finance.set_xlim(min(minimum, 0) - span * 0.04, max(maximum, 0) + span * 0.55)
+            finance_axes[-1].set_axis_off()
+            finance_figure.tight_layout(pad=2.2)
+            finance_chart.draw_idle()
+            inventory_stats.set(
                 f"Kho\n• Có sẵn: {report.available}  • Đang thuê: {report.rented}  • Chờ kiểm tra: {report.inspection}\n"
-                f"• Sửa chữa: {report.repair}  • Mất: {report.lost}  • Ngưng khai thác: {report.retired}  • Quá hạn: {report.overdue_count}"
+                f"• Đang giữ: {report.held}  • Sửa chữa: {report.repair}  • Mất: {report.lost}  • Ngưng khai thác: {report.retired}  • Quá hạn: {report.overdue_count}"
             )
             top_tree.delete(*top_tree.get_children())
             sale_tree.delete(*sale_tree.get_children())
+            customer_tree.delete(*customer_tree.get_children())
             combo_tree.delete(*combo_tree.get_children())
             voucher_tree.delete(*voucher_tree.get_children())
             overdue_tree.delete(*overdue_tree.get_children())
@@ -437,6 +525,9 @@ class StatisticsPageMixin:
                 top_tree.insert("", END, text=title, values=(count,))
             for title, count in report.top_sales:
                 sale_tree.insert("", END, text=title, values=(count,))
+            for customer in report.top_customers:
+                customer_tree.insert("", END, iid=str(customer.customer_id), text=customer.customer_name,
+                                     values=(customer.phone, customer.order_count, vnd(customer.total, exact=True)))
             for name, count in report.top_combos:
                 combo_tree.insert("", END, text=name, values=(count,))
             for name, count in report.top_vouchers:
@@ -457,25 +548,31 @@ class StatisticsPageMixin:
                 stockout_tree.insert("", END, text=item.title, values=(eta,))
             axis.clear()
             self._style_figure(figure)
-            labels = ["Có sẵn", "Đang thuê", "Kiểm tra", "Sửa chữa", "Mất", "Ngưng"]
+            labels = ["Có sẵn", "Đang giữ", "Đang thuê", "Kiểm tra", "Sửa chữa", "Mất", "Ngưng"]
             values = [
                 report.available,
+                report.held,
                 report.rented,
                 report.inspection,
                 report.repair,
                 report.lost,
                 report.retired,
             ]
-            bars = axis.bar(
-                labels,
-                values,
-                color=["#2e8b57", "#3b82f6", "#f59e0b", "#ef4444", "#7c3aed", "#6b7280"],
-            )
             bar_statuses.clear()
-            bar_statuses.update(zip(bars, inventory_statuses))
-            for bar in bars:
-                bar.set_picker(True)
-            axis.set_ylabel("Số bản đĩa")
+            colors = ["#48C78E", "#FFD166", "#58A6FF", "#FFAE42", "#FF6B6B", "#BD93F9", "#A8B5C2"]
+            positive = [(label, value, status, color) for label, value, status, color in zip(labels, values, inventory_statuses, colors) if value]
+            if positive:
+                wedges, _ = axis.pie([value for _, value, _, _ in positive], startangle=90,
+                                     colors=[color for _, _, _, color in positive])
+                total = sum(values)
+                axis.legend(wedges, [f"{label}: {value} ({value / total:.1%})" for label, value, _, _ in positive],
+                            loc="center left", bbox_to_anchor=(1, 0.5), labelcolor=self._palette.foreground,
+                            facecolor=self._palette.surface, edgecolor=self._palette.border, framealpha=1)
+                bar_statuses.update((wedge, status) for wedge, (_, _, status, _) in zip(wedges, positive))
+                for wedge in wedges:
+                    wedge.set_picker(True)
+            else:
+                axis.text(0.5, 0.5, "Kho chưa có đĩa", ha="center", transform=axis.transAxes)
             axis.set_title("Trạng thái tồn kho")
             figure.tight_layout()
             chart.draw_idle()
@@ -487,6 +584,8 @@ class StatisticsPageMixin:
             damage_axis.clear()
             genre_axis.clear()
             self._style_figure(analysis_figure)
+            self._style_figure(revenue_figure)
+            self._style_figure(damage_figure)
             dates = sorted({day for day, _action, _amount in chart_data.revenue})
             if dates:
                 by_day = {(day, action): amount for day, action, amount in chart_data.revenue}
@@ -532,6 +631,10 @@ class StatisticsPageMixin:
             genre_axis.set_xlabel("Số lượt bán")
             analysis_figure.tight_layout()
             analysis_chart.draw_idle()
+            revenue_figure.tight_layout()
+            revenue_chart.draw_idle()
+            damage_figure.tight_layout()
+            damage_chart.draw_idle()
 
         def refresh():
             try:

@@ -47,6 +47,21 @@ class DashboardPageMixin:
             text="Nhập phim/tập",
             command=lambda: self.show_page("Phim & tập", self.catalog_page),
         ).pack(side=LEFT, padx=4)
+        def add_copy():
+            self.show_page("Kho đĩa", self.inventory_page)
+            self.pages["Kho đĩa"].add_copy()
+
+        def add_copies_csv():
+            self.show_page("Kho đĩa", self.inventory_page)
+            self.pages["Kho đĩa"].import_copies_csv()
+
+        import_button = ttk.Menubutton(quick, text="Nhập đĩa",
+                                       state="normal" if self._can_manage() else "disabled")
+        import_menu = tk.Menu(import_button, tearoff=False)
+        import_menu.add_command(label="Nhập thủ công", command=add_copy)
+        import_menu.add_command(label="Nhập từ CSV", command=add_copies_csv)
+        import_button.configure(menu=import_menu)
+        import_button.pack(side=LEFT, padx=4)
         tabs = ttk.Notebook(page)
         tabs.pack(fill=BOTH, expand=True, padx=4, pady=(14, 0))
         trees = {}
@@ -63,7 +78,10 @@ class DashboardPageMixin:
         ):
             frame = ttk.Frame(tabs, padding=8)
             tabs.add(frame, text=title)
-            tree = self._create_treeview(frame, columns=tuple(column for column, _ in columns), show="tree headings")
+            tree = self._create_treeview(
+                frame, columns=tuple(column for column, _ in columns), show="tree headings",
+                selectmode="extended",
+            )
             tree.heading("#0", text="Phim / tập")
             for column, label in columns:
                 tree.heading(column, text=label)
@@ -132,6 +150,30 @@ class DashboardPageMixin:
         tab_generations = {key: 0 for key in keys}
         discovery_rows = {}
 
+        def create_order(key):
+            selection = trees[key].selection()
+            if not selection:
+                return messagebox.showinfo("Tạo phiếu", "Hãy chọn phim hoặc tập phim.", parent=self)
+            self.show_page("Tạo phiếu", self.checkout_page)
+            checkout_page = self.pages["Tạo phiếu"]
+            if key == "upcoming":
+                checkout_page.open_reservations([int(target) for target in selection])
+                return
+            action = LineAction.BUY if key == "sales" else LineAction.RENT
+            for index, target in enumerate(selection):
+                if target.startswith("show:"):
+                    dialog = checkout_page.select_season(int(target[5:]), action)
+                    if dialog is not None and index < len(selection) - 1:
+                        self.wait_window(dialog)
+                else:
+                    checkout_page.add_catalog_item(int(target), action)
+
+        for key in ("hot", "sales", "discovery", "random", "upcoming", "recommendations"):
+            trees[key].bind("<Double-1>", lambda _event, current=key: create_order(current))
+            ttk.Button(trees[key].master, text="Tạo phiếu", command=lambda current=key: create_order(current)).pack(anchor="e", pady=3)
+            ttk.Label(trees[key].master, text="Giữ Ctrl hoặc Shift để chọn nhiều phim.",
+                      bootstyle="secondary").pack(anchor="w")
+
         def load_tab(_event=None):
             index = tabs.index(tabs.select())
             key = keys[index]
@@ -144,8 +186,8 @@ class DashboardPageMixin:
             request = PageRequest(page_numbers[key].get(), 50) if key in page_numbers else None
             work = {
                 "stock": lambda: self.store.query_dashboard_low_stock(request),
-                "hot": lambda: self.store.dashboard_popular(LineAction.RENT),
-                "sales": lambda: self.store.dashboard_popular(LineAction.BUY),
+                "hot": lambda: self.store.dashboard_popular_targets(LineAction.RENT),
+                "sales": lambda: self.store.dashboard_popular_targets(LineAction.BUY),
                 "discovery": self.store.dashboard_discovery,
                 "random": self.store.dashboard_random,
                 "upcoming": lambda: self.store.query_dashboard_upcoming(request),
@@ -182,8 +224,9 @@ class DashboardPageMixin:
                         item_id, title = row
                         tree.insert("", END, iid=str(item_id), text=title, values=("Phim còn đĩa",))
                     else:
-                        title, count = row
-                        tree.insert("", END, text=title, values=(count,))
+                        show_id, item_id, title, count = row
+                        target = f"show:{show_id}" if show_id else str(item_id)
+                        tree.insert("", END, iid=target, text=title, values=(count,))
 
             def failed(exc):
                 if token != generation["value"] or tab_token != tab_generations[key] or not page.winfo_exists():

@@ -46,6 +46,19 @@ class CustomerView:
 
 
 @dataclass(frozen=True)
+class PremiumPlanView:
+    days: int
+    price: Decimal
+    active: bool
+
+
+@dataclass(frozen=True)
+class PremiumSettingsView:
+    merchandise_percent: Decimal
+    deposit_percent: Decimal
+
+
+@dataclass(frozen=True)
 class GenreView:
     id: int
     name: str
@@ -207,6 +220,9 @@ class Quote:
     discount_source_codes: dict[str, str | None]
     line_deposits: dict[int, Decimal] = field(default_factory=dict)
     line_discounts: dict[int, Decimal] = field(default_factory=dict)
+    premium_fee: Decimal = Decimal("0")
+    premium_starts_on: date | None = None
+    premium_ends_on: date | None = None
 
 
 @dataclass(frozen=True)
@@ -228,6 +244,18 @@ class ActiveRental:
     deposit_paid: Decimal = Decimal("0")
     order_code: str = ""
     order_balance_due: Decimal = Decimal("0")
+
+
+@dataclass(frozen=True)
+class RentalHistoryEntry:
+    order_id: int
+    order_code: str
+    created_at: datetime
+    title: str
+    barcode: str | None
+    due_date: date | None
+    returned_on: date | None
+    state: RentalState | None
 
 
 @dataclass(frozen=True)
@@ -360,6 +388,8 @@ class ReservationView:
     item_id: int | None = None
     show_id: int | None = None
     fulfilled_action: LineAction | None = None
+    barcode: str | None = None
+    poster_path: str | None = None
 
 
 @dataclass(frozen=True)

@@ -21,6 +21,8 @@ from normastore.infrastructure.database.models.payment_transaction import Paymen
 from normastore.infrastructure.database.models.penalty_charge import PenaltyCharge
 from normastore.infrastructure.database.models.physical_copy import PhysicalCopy
 from normastore.infrastructure.database.models.premium_membership import PremiumMembership
+from normastore.infrastructure.database.models.premium_plan import PremiumPlan
+from normastore.infrastructure.database.models.premium_settings import PremiumSettings
 from normastore.infrastructure.database.models.recommendation_cache import RecommendationCache
 from normastore.infrastructure.database.models.rental_extension import RentalExtension
 from normastore.infrastructure.database.models.rental_term import RentalTerm
@@ -41,6 +43,8 @@ __all__ = [
     "UserAccount",
     "Customer",
     "PremiumMembership",
+    "PremiumPlan",
+    "PremiumSettings",
     "Show",
     "Season",
     "CatalogItem",

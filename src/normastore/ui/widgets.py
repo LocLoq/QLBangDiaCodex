@@ -194,7 +194,7 @@ class CommonWidgetsMixin:
         self.wait_window(dialog)
         return selected[0] if selected else None
 
-    def _quick_customer(self, combo, *, customer: CustomerView | None = None) -> None:
+    def _quick_customer(self, combo, *, customer: CustomerView | None = None, on_saved=None) -> None:
         dialog = self._dialog("Sửa khách hàng" if customer else "Thêm khách hàng", 540, 440)
         form = ttk.Frame(dialog, padding=14)
         form.pack(fill="both", expand=True)
@@ -222,6 +222,9 @@ class CommonWidgetsMixin:
                 messagebox.showerror("Khách hàng", str(exc), parent=dialog)
                 return
             dialog.destroy()
+            if on_saved is not None:
+                on_saved(saved)
+                return
             page = self.pages.get(self._active_page)
             refresh = getattr(page, "refresh", None) if page else None
             if refresh:
